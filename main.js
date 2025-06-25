@@ -145,7 +145,7 @@ async function updateArticleStatus(articleId, status, summary = null) {
 
 ipcMain.handle('get-feeds', async () => {
     return new Promise((resolve, reject) => {
-        db.all("SELECT *, COALESCE(displayName, name) as name FROM feeds ORDER BY name", [], (err, rows) => {
+        db.all("SELECT *, COALESCE(displayName, name) as name FROM feeds ORDER BY orderIndex ASC, name ASC", [], (err, rows) => {
             if (err) reject(err);
             resolve(rows);
         });
@@ -154,7 +154,7 @@ ipcMain.handle('get-feeds', async () => {
 
 ipcMain.handle('get-folders', async () => {
     return new Promise((resolve, reject) => {
-        db.all("SELECT * FROM folders ORDER BY name", [], (err, rows) => {
+        db.all("SELECT * FROM folders ORDER BY orderIndex ASC, name ASC", [], (err, rows) => {
             if (err) reject(err);
             resolve(rows);
         });
@@ -163,12 +163,18 @@ ipcMain.handle('get-folders', async () => {
 
 ipcMain.handle('create-folder', async (event, folderName) => {
     return new Promise((resolve, reject) => {
-        const stmt = db.prepare("INSERT INTO folders (name) VALUES (?)");
-        stmt.run(folderName, function (err) {
-            if (err) return reject(new Error("Failed to create folder."));
-            resolve({ id: this.lastID, name: folderName });
+        // Get the next order index
+        db.get("SELECT MAX(orderIndex) as maxOrder FROM folders", [], (err, row) => {
+            if (err) return reject(err);
+            const nextOrder = (row.maxOrder || 0) + 1;
+            
+            const stmt = db.prepare("INSERT INTO folders (name, orderIndex) VALUES (?, ?)");
+            stmt.run(folderName, nextOrder, function (err) {
+                if (err) return reject(new Error("Failed to create folder."));
+                resolve({ id: this.lastID, name: folderName, orderIndex: nextOrder });
+            });
+            stmt.finalize();
         });
-        stmt.finalize();
     });
 });
 
@@ -204,19 +210,86 @@ ipcMain.handle('move-feed-to-folder', async (event, { feedId, folderId }) => {
     });
 });
 
+ipcMain.handle('reorder-feeds', async (event, { feedId, newIndex, targetFolderId }) => {
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            // First, update the feed's folder if it changed
+            if (targetFolderId !== undefined) {
+                db.run("UPDATE feeds SET folderId = ? WHERE id = ?", [targetFolderId, feedId]);
+            }
+            
+            // Get all feeds in the target folder
+            const folderCondition = targetFolderId ? "folderId = ?" : "folderId IS NULL";
+            const params = targetFolderId ? [targetFolderId] : [];
+            
+            db.all(`SELECT id, orderIndex FROM feeds WHERE ${folderCondition} ORDER BY orderIndex ASC`, params, (err, feeds) => {
+                if (err) return reject(err);
+                
+                // Remove the dragged feed from the array
+                const draggedFeed = feeds.find(f => f.id === feedId);
+                const filteredFeeds = feeds.filter(f => f.id !== feedId);
+                
+                // Insert at new position
+                filteredFeeds.splice(newIndex, 0, draggedFeed);
+                
+                // Update order indices
+                const stmt = db.prepare("UPDATE feeds SET orderIndex = ? WHERE id = ?");
+                filteredFeeds.forEach((feed, index) => {
+                    stmt.run(index, feed.id);
+                });
+                stmt.finalize((err) => {
+                    if (err) reject(err);
+                    else resolve({ success: true });
+                });
+            });
+        });
+    });
+});
+
+ipcMain.handle('reorder-folders', async (event, { folderId, newIndex }) => {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT id, orderIndex FROM folders ORDER BY orderIndex ASC", [], (err, folders) => {
+            if (err) return reject(err);
+            
+            // Remove the dragged folder from the array
+            const draggedFolder = folders.find(f => f.id === folderId);
+            const filteredFolders = folders.filter(f => f.id !== folderId);
+            
+            // Insert at new position
+            filteredFolders.splice(newIndex, 0, draggedFolder);
+            
+            // Update order indices
+            const stmt = db.prepare("UPDATE folders SET orderIndex = ? WHERE id = ?");
+            filteredFolders.forEach((folder, index) => {
+                stmt.run(index, folder.id);
+            });
+            stmt.finalize((err) => {
+                if (err) reject(err);
+                else resolve({ success: true });
+            });
+        });
+    });
+});
+
 ipcMain.handle('add-feed', async (event, feedUrl) => {
     try {
         const feed = await parser.parseURL(feedUrl);
         const feedName = feed.title;
         const newFeedId = await new Promise((resolve, reject) => {
-            const stmt = db.prepare("INSERT INTO feeds (name, url) VALUES (?, ?)");
-            stmt.run(feedName, feedUrl, function (err) {
-                if (err) return reject(new Error("Failed to add feed. It may already exist."));
-                resolve(this.lastID);
+            // Get the next order index
+            db.get("SELECT MAX(orderIndex) as maxOrder FROM feeds", [], (err, row) => {
+                if (err) return reject(err);
+                const nextOrder = (row.maxOrder || 0) + 1;
+                
+                const stmt = db.prepare("INSERT INTO feeds (name, url, orderIndex) VALUES (?, ?, ?)");
+                stmt.run(feedName, feedUrl, nextOrder, function (err) {
+                    if (err) return reject(new Error("Failed to add feed. It may already exist."));
+                    resolve(this.lastID);
+                });
+                stmt.finalize();
             });
-            stmt.finalize();
         });
-        const newFeed = { id: newFeedId, name: feedName, url: feedUrl };
+        const newFeed = { id: newFeedId, name: feedName, url: feedUrl, orderIndex: (await new Promise(resolve => db.get("SELECT MAX(orderIndex) as maxOrder FROM feeds", [], (err, row) => resolve(row.maxOrder)))) };
         runAgentCycle();
         return newFeed;
     } catch (error) {

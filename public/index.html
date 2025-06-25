@@ -33,6 +33,8 @@
             isSettingsVisible: false,
             isLoadingArticles: false,
             expandedFolders: new Set(),
+            draggedItem: null,
+            dragOverItem: null,
         };
 
         function reducer(state, action) {
@@ -70,6 +72,10 @@
                         newExpandedFolders.add(action.payload);
                     }
                     return { ...state, expandedFolders: newExpandedFolders };
+                case 'SET_DRAGGED_ITEM':
+                    return { ...state, draggedItem: action.payload };
+                case 'SET_DRAG_OVER_ITEM':
+                    return { ...state, dragOverItem: action.payload };
                 case 'SELECT_FEED':
                     if (state.selectedFeed?.id === action.payload.id) return state;
                     return { ...state, selectedFeed: action.payload, selectedArticle: null, articles: [], isLoadingArticles: true };
@@ -101,7 +107,7 @@
 
         // --- Components ---
 
-        function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, onSelectFeed, onShowSettings, onToggleFolder }) {
+        function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem, dragOverItem, onSelectFeed, onShowSettings, onToggleFolder, onDragStart, onDragOver, onDragEnd, onDrop }) {
             // Organize feeds by folder
             const feedsByFolder = feeds.reduce((acc, feed) => {
                 const folderId = feed.folderId || 'uncategorized';
@@ -110,34 +116,68 @@
                 return acc;
             }, {});
 
-            const renderFeed = (feed) => (
-                <li key={feed.id}
-                    className={`p-2 rounded-md cursor-pointer mb-1 ml-4 ${selectedFeed?.id === feed.id ? 'bg-blue-600' : 'hover:bg-gray-700'}`}
-                    onClick={() => onSelectFeed(feed)}
-                >
-                    <i className="fas fa-rss text-xs mr-2 text-gray-400"></i>
-                    {feed.name}
-                </li>
-            );
+            const renderFeed = (feed, folderContext = null) => {
+                const isDragging = draggedItem?.type === 'feed' && draggedItem?.id === feed.id;
+                const isDragOver = dragOverItem?.type === 'feed' && dragOverItem?.id === feed.id;
+                
+                return (
+                    <li key={feed.id}
+                        draggable
+                        className={`p-2 rounded-md cursor-pointer mb-1 ml-4 transition-all duration-200 ${
+                            selectedFeed?.id === feed.id ? 'bg-blue-600' : 'hover:bg-gray-700'
+                        } ${isDragging ? 'opacity-50 scale-95' : ''} ${
+                            isDragOver ? 'border-2 border-blue-400 border-dashed' : ''
+                        }`}
+                        onClick={() => onSelectFeed(feed)}
+                        onDragStart={(e) => onDragStart(e, { type: 'feed', id: feed.id, data: feed })}
+                        onDragOver={(e) => onDragOver(e, { type: 'feed', id: feed.id, folderContext })}
+                        onDragEnd={onDragEnd}
+                        onDrop={(e) => onDrop(e, { type: 'feed', id: feed.id, folderContext })}
+                    >
+                        <i className="fas fa-grip-vertical text-xs mr-2 text-gray-500"></i>
+                        <i className="fas fa-rss text-xs mr-2 text-gray-400"></i>
+                        {feed.name}
+                    </li>
+                );
+            };
 
             const renderFolder = (folder) => {
                 const isExpanded = expandedFolders.has(folder.id);
                 const folderFeeds = feedsByFolder[folder.id] || [];
+                const isDragging = draggedItem?.type === 'folder' && draggedItem?.id === folder.id;
+                const isDragOver = dragOverItem?.type === 'folder' && dragOverItem?.id === folder.id;
                 
                 return (
                     <div key={folder.id} className="mb-2">
                         <div 
-                            className="flex items-center p-2 rounded-md cursor-pointer hover:bg-gray-700"
+                            draggable
+                            className={`flex items-center p-2 rounded-md cursor-pointer hover:bg-gray-700 transition-all duration-200 ${
+                                isDragging ? 'opacity-50 scale-95' : ''
+                            } ${isDragOver ? 'border-2 border-blue-400 border-dashed' : ''}`}
                             onClick={() => onToggleFolder(folder.id)}
+                            onDragStart={(e) => onDragStart(e, { type: 'folder', id: folder.id, data: folder })}
+                            onDragOver={(e) => onDragOver(e, { type: 'folder', id: folder.id })}
+                            onDragEnd={onDragEnd}
+                            onDrop={(e) => onDrop(e, { type: 'folder', id: folder.id })}
                         >
+                            <i className="fas fa-grip-vertical text-xs mr-2 text-gray-500"></i>
                             <i className={`fas ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} text-xs mr-2 text-gray-400`}></i>
                             <i className="fas fa-folder text-yellow-500 mr-2"></i>
                             <span>{folder.name}</span>
                             <span className="ml-auto text-xs text-gray-500">({folderFeeds.length})</span>
                         </div>
                         {isExpanded && (
-                            <ul>
-                                {folderFeeds.map(renderFeed)}
+                            <ul
+                                onDragOver={(e) => onDragOver(e, { type: 'folder-content', id: folder.id })}
+                                onDrop={(e) => onDrop(e, { type: 'folder-content', id: folder.id })}
+                                className="min-h-4"
+                            >
+                                {folderFeeds.map(feed => renderFeed(feed, folder.id))}
+                                {folderFeeds.length === 0 && dragOverItem?.type === 'folder-content' && dragOverItem?.id === folder.id && (
+                                    <li className="p-2 ml-4 text-gray-500 border-2 border-blue-400 border-dashed rounded-md">
+                                        Drop feed here
+                                    </li>
+                                )}
                             </ul>
                         )}
                     </div>
@@ -159,8 +199,22 @@
                                 {feedsByFolder.uncategorized && feedsByFolder.uncategorized.length > 0 && (
                                     <div className="mt-4 pt-4 border-t border-gray-700">
                                         <div className="text-sm text-gray-400 mb-2 px-2">Uncategorized</div>
-                                        <ul>
-                                            {feedsByFolder.uncategorized.map(renderFeed)}
+                                        <ul
+                                            onDragOver={(e) => onDragOver(e, { type: 'uncategorized' })}
+                                            onDrop={(e) => onDrop(e, { type: 'uncategorized' })}
+                                            className="min-h-4"
+                                        >
+                                            {feedsByFolder.uncategorized.map(feed => renderFeed(feed, null))}
+                                        </ul>
+                                    </div>
+                                )}
+                                {(!feedsByFolder.uncategorized || feedsByFolder.uncategorized.length === 0) && dragOverItem?.type === 'uncategorized' && (
+                                    <div className="mt-4 pt-4 border-t border-gray-700">
+                                        <div className="text-sm text-gray-400 mb-2 px-2">Uncategorized</div>
+                                        <ul className="min-h-4">
+                                            <li className="p-2 ml-4 text-gray-500 border-2 border-blue-400 border-dashed rounded-md">
+                                                Drop feed here to remove from folder
+                                            </li>
                                         </ul>
                                     </div>
                                 )}
@@ -449,7 +503,7 @@
         // Main App Component
         function App() {
             const [state, dispatch] = useReducer(reducer, initialState);
-            const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles, expandedFolders } = state;
+            const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles, expandedFolders, draggedItem, dragOverItem } = state;
 
             // --- API Abstractions ---
             const handleSelectFeed = useCallback(async (feed) => {
@@ -513,6 +567,87 @@
                 dispatch({ type: 'TOGGLE_FOLDER', payload: folderId });
             }, []);
 
+            // Drag and Drop handlers
+            const handleDragStart = useCallback((e, item) => {
+                e.stopPropagation();
+                dispatch({ type: 'SET_DRAGGED_ITEM', payload: item });
+                e.dataTransfer.effectAllowed = 'move';
+            }, []);
+
+            const handleDragOver = useCallback((e, item) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                dispatch({ type: 'SET_DRAG_OVER_ITEM', payload: item });
+            }, []);
+
+            const handleDragEnd = useCallback(() => {
+                dispatch({ type: 'SET_DRAGGED_ITEM', payload: null });
+                dispatch({ type: 'SET_DRAG_OVER_ITEM', payload: null });
+            }, []);
+
+            const handleDrop = useCallback(async (e, dropTarget) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                if (!draggedItem) return;
+
+                try {
+                    // Handle feed drops
+                    if (draggedItem.type === 'feed') {
+                        // Dropping feed into folder
+                        if (dropTarget.type === 'folder-content') {
+                            const targetFolderId = dropTarget.id;
+                            if (draggedItem.data.folderId !== targetFolderId) {
+                                await window.api.moveFeedToFolder(draggedItem.id, targetFolderId);
+                                dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId: draggedItem.id, folderId: targetFolderId } });
+                            }
+                        }
+                        // Dropping feed into uncategorized
+                        else if (dropTarget.type === 'uncategorized') {
+                            if (draggedItem.data.folderId !== null) {
+                                await window.api.moveFeedToFolder(draggedItem.id, null);
+                                dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId: draggedItem.id, folderId: null } });
+                            }
+                        }
+                        // Reordering feeds within same context
+                        else if (dropTarget.type === 'feed') {
+                            const targetFolder = dropTarget.folderContext;
+                            const sourceFolder = draggedItem.data.folderId;
+                            
+                            if (targetFolder === sourceFolder) {
+                                // Calculate new index
+                                const feedsInFolder = feeds.filter(f => f.folderId === targetFolder);
+                                const targetIndex = feedsInFolder.findIndex(f => f.id === dropTarget.id);
+                                
+                                await window.api.reorderFeeds(draggedItem.id, targetIndex, targetFolder);
+                                
+                                // Refresh feeds to get updated order
+                                const allFeeds = await window.api.getFeeds();
+                                dispatch({ type: 'SET_FEEDS', payload: allFeeds });
+                            } else {
+                                // Moving to different folder
+                                await window.api.moveFeedToFolder(draggedItem.id, targetFolder);
+                                dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId: draggedItem.id, folderId: targetFolder } });
+                            }
+                        }
+                    }
+                    // Handle folder drops (reordering)
+                    else if (draggedItem.type === 'folder' && dropTarget.type === 'folder') {
+                        const targetIndex = folders.findIndex(f => f.id === dropTarget.id);
+                        await window.api.reorderFolders(draggedItem.id, targetIndex);
+                        
+                        // Refresh folders to get updated order
+                        const allFolders = await window.api.getFolders();
+                        dispatch({ type: 'SET_FOLDERS', payload: allFolders });
+                    }
+                } catch (error) {
+                    console.error('Drag and drop error:', error);
+                }
+
+                handleDragEnd();
+            }, [draggedItem, feeds, folders]);
+
             // --- Effects ---
             useEffect(() => {
                 Promise.all([
@@ -562,9 +697,15 @@
                                 folders={folders}
                                 selectedFeed={selectedFeed}
                                 expandedFolders={expandedFolders}
+                                draggedItem={draggedItem}
+                                dragOverItem={dragOverItem}
                                 onSelectFeed={handleSelectFeed}
                                 onShowSettings={() => dispatch({ type: 'SHOW_SETTINGS' })}
                                 onToggleFolder={handleToggleFolder}
+                                onDragStart={handleDragStart}
+                                onDragOver={handleDragOver}
+                                onDragEnd={handleDragEnd}
+                                onDrop={handleDrop}
                             />
                         </div>
                         <div className="col-span-12 md:col-span-4 lg:col-span-3 overflow-hidden">

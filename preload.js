@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   createFolder: (name) => ipcRenderer.invoke('create-folder', name),
   deleteFolder: (id) => ipcRenderer.invoke('delete-folder', id),
   renameFolder: (folderId, newName) => ipcRenderer.invoke('rename-folder', { folderId, newName }),
+  reorderFolders: (folderId, newIndex) => ipcRenderer.invoke('reorder-folders', { folderId, newIndex }),
+  reorderFeeds: (feedId, newIndex, targetFolderId) => ipcRenderer.invoke('reorder-feeds', { feedId, newIndex, targetFolderId }),
 
   // Article-related functions
   getArticles: (feedId) => ipcRenderer.invoke('get-articles', feedId),

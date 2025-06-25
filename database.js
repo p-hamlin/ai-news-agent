@@ -22,6 +22,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 parentId INTEGER,
+                orderIndex INTEGER DEFAULT 0,
                 createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (parentId) REFERENCES folders (id) ON DELETE CASCADE
             )`);
@@ -33,6 +34,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 url TEXT NOT NULL UNIQUE,
                 displayName TEXT,
                 folderId INTEGER,
+                orderIndex INTEGER DEFAULT 0,
                 createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (folderId) REFERENCES folders (id) ON DELETE SET NULL
             )`);
@@ -70,6 +72,18 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 if (!columns.find(c => c.name === 'folderId')) {
                     console.log('Adding "folderId" column to feeds table.');
                     db.run("ALTER TABLE feeds ADD COLUMN folderId INTEGER");
+                }
+                if (!columns.find(c => c.name === 'orderIndex')) {
+                    console.log('Adding "orderIndex" column to feeds table.');
+                    db.run("ALTER TABLE feeds ADD COLUMN orderIndex INTEGER DEFAULT 0");
+                }
+            });
+
+            db.all("PRAGMA table_info(folders)", (err, columns) => {
+                if (err) return;
+                if (!columns.find(c => c.name === 'orderIndex')) {
+                    console.log('Adding "orderIndex" column to folders table.');
+                    db.run("ALTER TABLE folders ADD COLUMN orderIndex INTEGER DEFAULT 0");
                 }
             });
         });
