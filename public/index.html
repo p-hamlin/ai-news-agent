@@ -392,7 +392,7 @@
             return (
                 <>
                     <div className="h-screen w-screen grid grid-cols-1 md:grid-cols-12">
-                        <div className="col-span-12 md:col-span-3 lg:col-span-2">
+                        <div className="col-span-12 md:col-span-3 lg:col-span-2 overflow-hidden">
                            <FeedsPanel 
                                 feeds={feeds}
                                 selectedFeed={selectedFeed}
@@ -400,7 +400,7 @@
                                 onShowSettings={() => dispatch({ type: 'SHOW_SETTINGS' })}
                             />
                         </div>
-                        <div className="col-span-12 md:col-span-4 lg:col-span-3">
+                        <div className="col-span-12 md:col-span-4 lg:col-span-3 overflow-hidden">
                            <ArticlesPanel 
                                 articles={articles}
                                 selectedArticle={selectedArticle}
