@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI News Aggregator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #2d3748; }
+        ::-webkit-scrollbar-thumb { background: #4a5568; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #718096; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 font-sans">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useReducer } = React;
+
+        // --- State Management ---
+        const initialState = {
+            feeds: [],
+            articles: [],
+            selectedFeed: null,
+            selectedArticle: null,
+            isSettingsVisible: false,
+            isLoadingArticles: false,
+        };
+
+        function reducer(state, action) {
+            switch (action.type) {
+                case 'SET_FEEDS':
+                    return { ...state, feeds: action.payload };
+                case 'ADD_FEED':
+                    return { ...state, feeds: [...state.feeds, action.payload].sort((a, b) => a.name.localeCompare(b.name)) };
+                case 'DELETE_FEED':
+                    const newFeeds = state.feeds.filter(f => f.id !== action.payload);
+                    const newSelectedFeed = state.selectedFeed?.id === action.payload ? null : state.selectedFeed;
+                    return { ...state, feeds: newFeeds, selectedFeed: newSelectedFeed, articles: newSelectedFeed ? state.articles : [], selectedArticle: newSelectedFeed ? state.selectedArticle : null };
+                case 'UPDATE_FEED_DISPLAY_NAME':
+                    return {
+                        ...state,
+                        feeds: state.feeds.map(f => f.id === action.payload.feedId ? { ...f, name: action.payload.displayName } : f),
+                        selectedFeed: state.selectedFeed?.id === action.payload.feedId ? { ...state.selectedFeed, name: action.payload.displayName } : state.selectedFeed,
+                    };
+                case 'SELECT_FEED':
+                    if (state.selectedFeed?.id === action.payload.id) return state;
+                    return { ...state, selectedFeed: action.payload, selectedArticle: null, articles: [], isLoadingArticles: true };
+                case 'SET_ARTICLES':
+                    return { ...state, articles: action.payload, isLoadingArticles: false };
+                case 'SELECT_ARTICLE':
+                    return { ...state, selectedArticle: action.payload, articles: state.articles.map(a => a.id === action.payload.id ? { ...a, isRead: 1 } : a) };
+                case 'UPDATE_ARTICLE_STATUS':
+                    const { articleId, status, summary } = action.payload;
+                    return {
+                        ...state,
+                        articles: state.articles.map(a => 
+                            a.id === articleId 
+                            ? { ...a, status, summary: summary !== null ? summary : a.summary } 
+                            : a
+                        ),
+                        selectedArticle: state.selectedArticle?.id === articleId 
+                            ? { ...state.selectedArticle, status, summary: summary !== null ? summary : state.selectedArticle.summary }
+                            : state.selectedArticle
+                    };
+                case 'SHOW_SETTINGS':
+                    return { ...state, isSettingsVisible: true };
+                case 'HIDE_SETTINGS':
+                    return { ...state, isSettingsVisible: false };
+                default:
+                    return state;
+            }
+        }
+
+        // --- Components ---
+
+        function FeedsPanel({ feeds, selectedFeed, onSelectFeed, onShowSettings }) {
+            return (
+                <div className="bg-gray-800 h-full flex flex-col p-4">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-bold">Feeds</h2>
+                        <button onClick={onShowSettings} className="text-gray-400 hover:text-white transition-colors">
+                            <i className="fas fa-cog"></i>
+                        </button>
+                    </div>
+                    <ul className="flex-grow overflow-y-auto">
+                        {feeds.length > 0 ? feeds.map(feed => (
+                            <li key={feed.id}
+                                className={`p-2 rounded-md cursor-pointer mb-1 ${selectedFeed?.id === feed.id ? 'bg-blue-600' : 'hover:bg-gray-700'}`}
+                                onClick={() => onSelectFeed(feed)}
+                            >
+                                {feed.name}
+                            </li>
+                        )) : (
+                             <div className="text-center text-gray-500 mt-10">Click the <i className="fas fa-cog mx-1"></i> to add a feed.</div>
+                        )}
+                    </ul>
+                </div>
+            );
+        }
+
+        function ArticleStatusIcon({ status }) {
+            switch (status) {
+                case 'new':
+                    return <i className="fas fa-magic-wand-sparkles text-xs text-blue-400" title="Ready to summarize"></i>;
+                case 'summarizing':
+                    return <i className="fas fa-spinner fa-spin text-xs text-gray-400" title="Summarizing..."></i>;
+                case 'failed':
+                    return <i className="fas fa-exclamation-triangle text-xs text-red-400" title="Summarization failed"></i>;
+                default:
+                    return null;
+            }
+        }
+
+        function ArticlesPanel({ articles, selectedArticle, onSelectArticle, isLoading }) {
+            return (
+                <div className="bg-gray-800/50 h-full flex flex-col p-4 border-l border-r border-gray-700">
+                    <h2 className="text-xl font-bold mb-4">Articles</h2>
+                    {isLoading ? (
+                        <div className="flex items-center justify-center h-full">
+                             <i className="fas fa-spinner fa-spin text-3xl text-gray-400"></i>
+                        </div>
+                    ) : (
+                        <ul className="flex-grow overflow-y-auto">
+                            {articles.length > 0 ? articles.map(article => (
+                                <li key={article.id}
+                                    className={`block p-3 rounded-md cursor-pointer mb-2 border-l-4 ${selectedArticle?.id === article.id ? 'bg-gray-700 border-blue-500' : 'border-transparent hover:bg-gray-700/50'}`}
+                                    onClick={() => onSelectArticle(article)}
+                                >
+                                    <div className="flex justify-between items-start">
+                                        <span className={`font-medium ${article.isRead ? 'text-gray-500' : 'text-gray-200'}`}>{article.title}</span>
+                                        <div className="flex-shrink-0 ml-2">
+                                            <ArticleStatusIcon status={article.status} />
+                                        </div>
+                                    </div>
+                                    <span className="text-xs text-gray-400 mt-1">
+                                        {new Date(article.pubDate).toLocaleDateString()}
+                                    </span>
+                                </li>
+                            )) : (
+                                <div className="text-center text-gray-500 mt-10">Select a feed to see articles.</div>
+                            )}
+                        </ul>
+                    )}
+                </div>
+            );
+        }
+
+        function ContentPanel({ article, onRetrySummarization }) {
+            if (!article) {
+                return (
+                    <div className="h-full flex items-center justify-center p-6">
+                         <div className="text-center text-gray-500">
+                            <i className="fas fa-arrow-left text-3xl mb-4"></i>
+                            <p>Select an article to view.</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="h-full flex flex-col p-6 overflow-y-auto">
+                    <h1 className="text-3xl font-bold mb-4">{article.title}</h1>
+                    <div className="bg-gray-800 p-4 rounded-lg mb-4">
+                        <h3 className="text-lg font-semibold mb-2 text-blue-400">AI Summary</h3>
+                        
+                        {article.status === 'summarizing' && (
+                            <div className="text-center p-4">
+                                <i className="fas fa-spinner fa-spin mr-2"></i> Generating summary...
+                            </div>
+                        )}
+
+                        {article.status === 'failed' && (
+                            <div className="text-center p-4 bg-red-900/50 rounded-md">
+                                <p className="text-red-400 mb-3">Summarization failed.</p>
+                                <button 
+                                    onClick={() => onRetrySummarization(article.id)}
+                                    className="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-1 px-3 rounded-md transition-colors text-sm"
+                                >
+                                    <i className="fas fa-sync-alt mr-2"></i> Retry
+                                </button>
+                            </div>
+                        )}
+
+                        {article.status === 'summarized' && (
+                             <div className="whitespace-pre-wrap text-gray-300 leading-relaxed">
+                                {article.summary}
+                            </div>
+                        )}
+
+                        {article.status === 'new' && (
+                            <div className="text-gray-400">This article hasn't been summarized yet.</div>
+                        )}
+                    </div>
+                    <div className="flex-grow"></div>
+                    <div className="flex space-x-4 mt-4">
+                        <a href={article.link} target="_blank" rel="noopener noreferrer" className="flex-1 text-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                            <i className="fas fa-book-open mr-2"></i> Show Full Article
+                        </a>
+                    </div>
+                </div>
+            );
+        }
+        
+        function SettingsModal({ feeds, isVisible, onClose, onAddFeed, onDeleteFeed, onUpdateFeedName }) {
+            if (!isVisible) return null;
+            const [url, setUrl] = useState('');
+            const [error, setError] = useState('');
+            const [isAdding, setIsAdding] = useState(false);
+            const [editingFeedId, setEditingFeedId] = useState(null);
+            const [editingName, setEditingName] = useState('');
+
+            const handleAddSubmit = async (e) => {
+                e.preventDefault();
+                if (!url) return;
+                setIsAdding(true);
+                setError('');
+                try {
+                    await onAddFeed(url);
+                    setUrl('');
+                } catch (err) {
+                    setError(err.message);
+                } finally {
+                    setIsAdding(false);
+                }
+            };
+
+            const handleEdit = (feed) => {
+                setEditingFeedId(feed.id);
+                setEditingName(feed.name);
+            };
+
+            const handleCancelEdit = () => {
+                setEditingFeedId(null);
+                setEditingName('');
+            };
+
+            const handleSaveEdit = async (feedId) => {
+                await onUpdateFeedName(feedId, editingName);
+                handleCancelEdit();
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+                    <div className="bg-gray-800 rounded-lg shadow-2xl p-8 w-full max-w-2xl text-white">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-2xl font-bold">Manage Feeds</h2>
+                            <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors text-2xl">&times;</button>
+                        </div>
+                        <div className="mb-8">
+                            <h3 className="text-xl font-semibold mb-3">Add New RSS Feed</h3>
+                            <form className="flex space-x-2" onSubmit={handleAddSubmit}>
+                                <input 
+                                    type="text" 
+                                    value={url}
+                                    onChange={(e) => setUrl(e.target.value)}
+                                    placeholder="e.g., https://www.theverge.com/rss/index.xml" 
+                                    className="flex-grow p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                />
+                                <button type="submit" disabled={isAdding} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed">
+                                    {isAdding ? <i className="fas fa-spinner fa-spin"></i> : 'Add'}
+                                </button>
+                            </form>
+                            {error && <p className="text-red-400 mt-2">{error}</p>}
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-semibold mb-3">Current Feeds</h3>
+                            <ul className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                                {feeds.map(feed => (
+                                    <li key={feed.id} className="bg-gray-700 p-3 rounded-md flex justify-between items-center">
+                                        {editingFeedId === feed.id ? (
+                                            <input 
+                                                type="text"
+                                                value={editingName}
+                                                onChange={(e) => setEditingName(e.target.value)}
+                                                className="flex-grow p-1 rounded-md bg-gray-600 border border-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        ) : (
+                                            <span className="truncate">{feed.name}</span>
+                                        )}
+                                        <div className="flex items-center space-x-2">
+                                            {editingFeedId === feed.id ? (
+                                                <>
+                                                    <button onClick={() => handleSaveEdit(feed.id)} className="text-green-500 hover:text-green-400"><i className="fas fa-check"></i></button>
+                                                    <button onClick={handleCancelEdit} className="text-gray-500 hover:text-gray-400"><i className="fas fa-times"></i></button>
+                                                </>
+                                            ) : (
+                                                <button onClick={() => handleEdit(feed)} className="text-gray-400 hover:text-white"><i className="fas fa-pencil-alt"></i></button>
+                                            )}
+                                            <button onClick={() => onDeleteFeed(feed.id)} className="text-red-500 hover:text-red-400"><i className="fas fa-trash-alt"></i></button>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Main App Component
+        function App() {
+            const [state, dispatch] = useReducer(reducer, initialState);
+            const { feeds, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles } = state;
+
+            // --- API Abstractions ---
+            const handleSelectFeed = useCallback(async (feed) => {
+                dispatch({ type: 'SELECT_FEED', payload: feed });
+                try {
+                    const fetchedArticles = await window.api.getArticles(feed.id);
+                    dispatch({ type: 'SET_ARTICLES', payload: fetchedArticles });
+                } catch (error) {
+                    console.error("Failed to fetch articles:", error);
+                    dispatch({ type: 'SET_ARTICLES', payload: [] }); // Clear articles on error
+                }
+            }, []);
+
+            const handleSelectArticle = useCallback((article) => {
+                if (!article.isRead) {
+                    window.api.markArticleAsRead(article.id).catch(err => console.error("Failed to mark as read:", err));
+                }
+                dispatch({ type: 'SELECT_ARTICLE', payload: article });
+            }, []);
+
+            const handleAddFeed = useCallback(async (url) => {
+                const newFeed = await window.api.addFeed(url);
+                dispatch({ type: 'ADD_FEED', payload: newFeed });
+            }, []);
+
+            const handleDeleteFeed = useCallback(async (id) => {
+                await window.api.deleteFeed(id);
+                dispatch({ type: 'DELETE_FEED', payload: id });
+            }, []);
+
+            const handleUpdateFeedName = useCallback(async (feedId, displayName) => {
+                await window.api.updateFeedDisplayName(feedId, displayName);
+                dispatch({ type: 'UPDATE_FEED_DISPLAY_NAME', payload: { feedId, displayName } });
+            }, []);
+
+            const handleRetrySummarization = useCallback(async (articleId) => {
+                try {
+                    await window.api.retrySummarization(articleId);
+                } catch (error) {
+                    console.error("Failed to retry summarization:", error);
+                    alert("Failed to retry summarization. See console for details.");
+                }
+            }, []);
+
+            // --- Effects ---
+            useEffect(() => {
+                window.api.getFeeds().then(allFeeds => {
+                    dispatch({ type: 'SET_FEEDS', payload: allFeeds });
+                }).catch(console.error);
+            }, []);
+            
+            useEffect(() => {
+                const cleanupArticles = window.api.onArticlesUpdated(({ feedId }) => {
+                    if (selectedFeed?.id === feedId) {
+                        handleSelectFeed(selectedFeed);
+                    }
+                });
+
+                const cleanupStatus = window.api.onArticleStatusUpdated((payload) => {
+                    dispatch({ type: 'UPDATE_ARTICLE_STATUS', payload });
+                });
+
+                return () => {
+                    cleanupArticles();
+                    cleanupStatus();
+                };
+            }, [selectedFeed, handleSelectFeed]);
+
+            if (!window.api) {
+                return (
+                    <div className="h-screen w-screen flex items-center justify-center bg-gray-900 text-white p-8">
+                        <div className="text-center bg-red-800 rounded-lg p-6 shadow-2xl max-w-2xl">
+                            <h1 className="text-3xl font-bold mb-4"><i className="fas fa-exclamation-triangle mr-3"></i>Fatal Error</h1>
+                            <p className="text-lg">The application's backend API (`window.api`) failed to load.</p>
+                            <p className="mt-2 text-gray-300">This is a common setup issue. Please open the Developer Tools (usually under the "View" menu) and check the Console for errors. Ensure your `preload.js` script is correctly named and configured in your `main.js` file.</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <>
+                    <div className="h-screen w-screen grid grid-cols-1 md:grid-cols-12">
+                        <div className="col-span-12 md:col-span-3 lg:col-span-2">
+                           <FeedsPanel 
+                                feeds={feeds}
+                                selectedFeed={selectedFeed}
+                                onSelectFeed={handleSelectFeed}
+                                onShowSettings={() => dispatch({ type: 'SHOW_SETTINGS' })}
+                            />
+                        </div>
+                        <div className="col-span-12 md:col-span-4 lg:col-span-3">
+                           <ArticlesPanel 
+                                articles={articles}
+                                selectedArticle={selectedArticle}
+                                onSelectArticle={handleSelectArticle}
+                                isLoading={isLoadingArticles}
+                            />
+                        </div>
+                        <div className="col-span-12 md:col-span-5 lg:col-span-7">
+                           <ContentPanel 
+                                article={selectedArticle} 
+                                onRetrySummarization={handleRetrySummarization}
+                           />
+                        </div>
+                    </div>
+                    <SettingsModal 
+                        feeds={feeds}
+                        isVisible={isSettingsVisible} 
+                        onClose={() => dispatch({ type: 'HIDE_SETTINGS' })} 
+                        onAddFeed={handleAddFeed}
+                        onDeleteFeed={handleDeleteFeed}
+                        onUpdateFeedName={handleUpdateFeedName}
+                    />
+                </>
+            );
+        }
+        
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>

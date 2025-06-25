@@ -1,0 +1,20 @@
+{
+  "name": "ai-news-app",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "electron": "^36.4.0",
+    "electron-reloader": "^1.2.3",
+    "rss-parser": "^3.13.0",
+    "sanitize-html": "^2.17.0",
+    "sqlite3": "^5.1.7"
+  }
+}
