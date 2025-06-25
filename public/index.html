@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI News Aggregator</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -139,7 +140,7 @@
                                         </div>
                                     </div>
                                     <span className="text-xs text-gray-400 mt-1">
-                                        {new Date(article.pubDate).toLocaleDateString()}
+                                        {new Date(article.pubDate).toLocaleString()}
                                     </span>
                                 </li>
                             )) : (
@@ -188,9 +189,10 @@
                         )}
 
                         {article.status === 'summarized' && (
-                             <div className="whitespace-pre-wrap text-gray-300 leading-relaxed">
-                                {article.summary}
-                            </div>
+                             <div 
+                                className="prose prose-invert max-w-none text-gray-300 leading-relaxed"
+                                dangerouslySetInnerHTML={{ __html: marked.parse(article.summary) }}
+                             />
                         )}
 
                         {article.status === 'new' && (
