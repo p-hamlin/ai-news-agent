@@ -17,13 +17,24 @@ const db = new sqlite3.Database(dbPath, (err) => {
         console.log('Connected to the SQLite database.');
         // --- Create tables if they don't exist ---
         db.serialize(() => {
+            // Folders table: stores feed organization folders
+            db.run(`CREATE TABLE IF NOT EXISTS folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                parentId INTEGER,
+                createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (parentId) REFERENCES folders (id) ON DELETE CASCADE
+            )`);
+
             // Feeds table: stores the RSS feed URLs and their names
             db.run(`CREATE TABLE IF NOT EXISTS feeds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 url TEXT NOT NULL UNIQUE,
                 displayName TEXT,
-                createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+                folderId INTEGER,
+                createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (folderId) REFERENCES folders (id) ON DELETE SET NULL
             )`);
 
             // Articles table: stores articles fetched from feeds
@@ -55,6 +66,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 if (!columns.find(c => c.name === 'displayName')) {
                     console.log('Adding "displayName" column to feeds table.');
                     db.run("ALTER TABLE feeds ADD COLUMN displayName TEXT");
+                }
+                if (!columns.find(c => c.name === 'folderId')) {
+                    console.log('Adding "folderId" column to feeds table.');
+                    db.run("ALTER TABLE feeds ADD COLUMN folderId INTEGER");
                 }
             });
         });

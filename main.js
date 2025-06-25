@@ -152,6 +152,58 @@ ipcMain.handle('get-feeds', async () => {
     });
 });
 
+ipcMain.handle('get-folders', async () => {
+    return new Promise((resolve, reject) => {
+        db.all("SELECT * FROM folders ORDER BY name", [], (err, rows) => {
+            if (err) reject(err);
+            resolve(rows);
+        });
+    });
+});
+
+ipcMain.handle('create-folder', async (event, folderName) => {
+    return new Promise((resolve, reject) => {
+        const stmt = db.prepare("INSERT INTO folders (name) VALUES (?)");
+        stmt.run(folderName, function (err) {
+            if (err) return reject(new Error("Failed to create folder."));
+            resolve({ id: this.lastID, name: folderName });
+        });
+        stmt.finalize();
+    });
+});
+
+ipcMain.handle('delete-folder', async (event, folderId) => {
+    return new Promise((resolve, reject) => {
+        // First move all feeds out of this folder
+        db.run("UPDATE feeds SET folderId = NULL WHERE folderId = ?", [folderId], (err) => {
+            if (err) return reject(err);
+            // Then delete the folder
+            db.run("DELETE FROM folders WHERE id = ?", [folderId], (err) => {
+                if (err) return reject(err);
+                resolve({ success: true, id: folderId });
+            });
+        });
+    });
+});
+
+ipcMain.handle('rename-folder', async (event, { folderId, newName }) => {
+    return new Promise((resolve, reject) => {
+        db.run("UPDATE folders SET name = ? WHERE id = ?", [newName, folderId], (err) => {
+            if (err) reject(err);
+            resolve({ success: true });
+        });
+    });
+});
+
+ipcMain.handle('move-feed-to-folder', async (event, { feedId, folderId }) => {
+    return new Promise((resolve, reject) => {
+        db.run("UPDATE feeds SET folderId = ? WHERE id = ?", [folderId, feedId], (err) => {
+            if (err) reject(err);
+            resolve({ success: true });
+        });
+    });
+});
+
 ipcMain.handle('add-feed', async (event, feedUrl) => {
     try {
         const feed = await parser.parseURL(feedUrl);

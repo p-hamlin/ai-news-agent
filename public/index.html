@@ -26,29 +26,50 @@
         // --- State Management ---
         const initialState = {
             feeds: [],
+            folders: [],
             articles: [],
             selectedFeed: null,
             selectedArticle: null,
             isSettingsVisible: false,
             isLoadingArticles: false,
+            expandedFolders: new Set(),
         };
 
         function reducer(state, action) {
             switch (action.type) {
                 case 'SET_FEEDS':
                     return { ...state, feeds: action.payload };
+                case 'SET_FOLDERS':
+                    return { ...state, folders: action.payload };
                 case 'ADD_FEED':
                     return { ...state, feeds: [...state.feeds, action.payload].sort((a, b) => a.name.localeCompare(b.name)) };
+                case 'ADD_FOLDER':
+                    return { ...state, folders: [...state.folders, action.payload].sort((a, b) => a.name.localeCompare(b.name)) };
                 case 'DELETE_FEED':
                     const newFeeds = state.feeds.filter(f => f.id !== action.payload);
                     const newSelectedFeed = state.selectedFeed?.id === action.payload ? null : state.selectedFeed;
                     return { ...state, feeds: newFeeds, selectedFeed: newSelectedFeed, articles: newSelectedFeed ? state.articles : [], selectedArticle: newSelectedFeed ? state.selectedArticle : null };
+                case 'DELETE_FOLDER':
+                    return { ...state, folders: state.folders.filter(f => f.id !== action.payload) };
                 case 'UPDATE_FEED_DISPLAY_NAME':
                     return {
                         ...state,
                         feeds: state.feeds.map(f => f.id === action.payload.feedId ? { ...f, name: action.payload.displayName } : f),
                         selectedFeed: state.selectedFeed?.id === action.payload.feedId ? { ...state.selectedFeed, name: action.payload.displayName } : state.selectedFeed,
                     };
+                case 'MOVE_FEED_TO_FOLDER':
+                    return {
+                        ...state,
+                        feeds: state.feeds.map(f => f.id === action.payload.feedId ? { ...f, folderId: action.payload.folderId } : f),
+                    };
+                case 'TOGGLE_FOLDER':
+                    const newExpandedFolders = new Set(state.expandedFolders);
+                    if (newExpandedFolders.has(action.payload)) {
+                        newExpandedFolders.delete(action.payload);
+                    } else {
+                        newExpandedFolders.add(action.payload);
+                    }
+                    return { ...state, expandedFolders: newExpandedFolders };
                 case 'SELECT_FEED':
                     if (state.selectedFeed?.id === action.payload.id) return state;
                     return { ...state, selectedFeed: action.payload, selectedArticle: null, articles: [], isLoadingArticles: true };
@@ -80,7 +101,49 @@
 
         // --- Components ---
 
-        function FeedsPanel({ feeds, selectedFeed, onSelectFeed, onShowSettings }) {
+        function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, onSelectFeed, onShowSettings, onToggleFolder }) {
+            // Organize feeds by folder
+            const feedsByFolder = feeds.reduce((acc, feed) => {
+                const folderId = feed.folderId || 'uncategorized';
+                if (!acc[folderId]) acc[folderId] = [];
+                acc[folderId].push(feed);
+                return acc;
+            }, {});
+
+            const renderFeed = (feed) => (
+                <li key={feed.id}
+                    className={`p-2 rounded-md cursor-pointer mb-1 ml-4 ${selectedFeed?.id === feed.id ? 'bg-blue-600' : 'hover:bg-gray-700'}`}
+                    onClick={() => onSelectFeed(feed)}
+                >
+                    <i className="fas fa-rss text-xs mr-2 text-gray-400"></i>
+                    {feed.name}
+                </li>
+            );
+
+            const renderFolder = (folder) => {
+                const isExpanded = expandedFolders.has(folder.id);
+                const folderFeeds = feedsByFolder[folder.id] || [];
+                
+                return (
+                    <div key={folder.id} className="mb-2">
+                        <div 
+                            className="flex items-center p-2 rounded-md cursor-pointer hover:bg-gray-700"
+                            onClick={() => onToggleFolder(folder.id)}
+                        >
+                            <i className={`fas ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'} text-xs mr-2 text-gray-400`}></i>
+                            <i className="fas fa-folder text-yellow-500 mr-2"></i>
+                            <span>{folder.name}</span>
+                            <span className="ml-auto text-xs text-gray-500">({folderFeeds.length})</span>
+                        </div>
+                        {isExpanded && (
+                            <ul>
+                                {folderFeeds.map(renderFeed)}
+                            </ul>
+                        )}
+                    </div>
+                );
+            };
+
             return (
                 <div className="bg-gray-800 h-full flex flex-col p-4">
                     <div className="flex justify-between items-center mb-4">
@@ -89,18 +152,23 @@
                             <i className="fas fa-cog"></i>
                         </button>
                     </div>
-                    <ul className="flex-grow overflow-y-auto">
-                        {feeds.length > 0 ? feeds.map(feed => (
-                            <li key={feed.id}
-                                className={`p-2 rounded-md cursor-pointer mb-1 ${selectedFeed?.id === feed.id ? 'bg-blue-600' : 'hover:bg-gray-700'}`}
-                                onClick={() => onSelectFeed(feed)}
-                            >
-                                {feed.name}
-                            </li>
-                        )) : (
-                             <div className="text-center text-gray-500 mt-10">Click the <i className="fas fa-cog mx-1"></i> to add a feed.</div>
+                    <div className="flex-grow overflow-y-auto">
+                        {folders.length > 0 || feeds.length > 0 ? (
+                            <div>
+                                {folders.map(renderFolder)}
+                                {feedsByFolder.uncategorized && feedsByFolder.uncategorized.length > 0 && (
+                                    <div className="mt-4 pt-4 border-t border-gray-700">
+                                        <div className="text-sm text-gray-400 mb-2 px-2">Uncategorized</div>
+                                        <ul>
+                                            {feedsByFolder.uncategorized.map(renderFeed)}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="text-center text-gray-500 mt-10">Click the <i className="fas fa-cog mx-1"></i> to add a feed.</div>
                         )}
-                    </ul>
+                    </div>
                 </div>
             );
         }
@@ -209,13 +277,15 @@
             );
         }
         
-        function SettingsModal({ feeds, isVisible, onClose, onAddFeed, onDeleteFeed, onUpdateFeedName }) {
+        function SettingsModal({ feeds, folders, isVisible, onClose, onAddFeed, onDeleteFeed, onUpdateFeedName, onCreateFolder, onDeleteFolder, onMoveFeedToFolder }) {
             if (!isVisible) return null;
             const [url, setUrl] = useState('');
             const [error, setError] = useState('');
             const [isAdding, setIsAdding] = useState(false);
             const [editingFeedId, setEditingFeedId] = useState(null);
             const [editingName, setEditingName] = useState('');
+            const [newFolderName, setNewFolderName] = useState('');
+            const [isCreatingFolder, setIsCreatingFolder] = useState(false);
 
             const handleAddSubmit = async (e) => {
                 e.preventDefault();
@@ -247,6 +317,28 @@
                 handleCancelEdit();
             };
 
+            const handleCreateFolder = async (e) => {
+                e.preventDefault();
+                if (!newFolderName.trim()) return;
+                setIsCreatingFolder(true);
+                try {
+                    await onCreateFolder(newFolderName.trim());
+                    setNewFolderName('');
+                } catch (err) {
+                    console.error('Failed to create folder:', err);
+                } finally {
+                    setIsCreatingFolder(false);
+                }
+            };
+
+            const handleMoveFeedToFolder = async (feedId, folderId) => {
+                try {
+                    await onMoveFeedToFolder(feedId, folderId);
+                } catch (err) {
+                    console.error('Failed to move feed:', err);
+                }
+            };
+
             return (
                 <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
                     <div className="bg-gray-800 rounded-lg shadow-2xl p-8 w-full max-w-2xl text-white">
@@ -270,31 +362,80 @@
                             </form>
                             {error && <p className="text-red-400 mt-2">{error}</p>}
                         </div>
+                        <div className="mb-8">
+                            <h3 className="text-xl font-semibold mb-3">Create Folder</h3>
+                            <form className="flex space-x-2" onSubmit={handleCreateFolder}>
+                                <input 
+                                    type="text" 
+                                    value={newFolderName}
+                                    onChange={(e) => setNewFolderName(e.target.value)}
+                                    placeholder="Folder name" 
+                                    className="flex-grow p-2 rounded-md bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                                />
+                                <button type="submit" disabled={isCreatingFolder} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed">
+                                    {isCreatingFolder ? <i className="fas fa-spinner fa-spin"></i> : 'Create'}
+                                </button>
+                            </form>
+                        </div>
+                        <div className="mb-8">
+                            <h3 className="text-xl font-semibold mb-3">Folders</h3>
+                            <ul className="space-y-2 max-h-40 overflow-y-auto pr-2">
+                                {folders.map(folder => (
+                                    <li key={folder.id} className="bg-gray-700 p-3 rounded-md flex justify-between items-center">
+                                        <div className="flex items-center">
+                                            <i className="fas fa-folder text-yellow-500 mr-2"></i>
+                                            <span className="truncate">{folder.name}</span>
+                                        </div>
+                                        <button onClick={() => onDeleteFolder(folder.id)} className="text-red-500 hover:text-red-400">
+                                            <i className="fas fa-trash-alt"></i>
+                                        </button>
+                                    </li>
+                                ))}
+                                {folders.length === 0 && (
+                                    <div className="text-center text-gray-500 py-4">No folders created yet.</div>
+                                )}
+                            </ul>
+                        </div>
                         <div>
                             <h3 className="text-xl font-semibold mb-3">Current Feeds</h3>
                             <ul className="space-y-2 max-h-60 overflow-y-auto pr-2">
                                 {feeds.map(feed => (
-                                    <li key={feed.id} className="bg-gray-700 p-3 rounded-md flex justify-between items-center">
-                                        {editingFeedId === feed.id ? (
-                                            <input 
-                                                type="text"
-                                                value={editingName}
-                                                onChange={(e) => setEditingName(e.target.value)}
-                                                className="flex-grow p-1 rounded-md bg-gray-600 border border-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                            />
-                                        ) : (
-                                            <span className="truncate">{feed.name}</span>
-                                        )}
-                                        <div className="flex items-center space-x-2">
+                                    <li key={feed.id} className="bg-gray-700 p-3 rounded-md">
+                                        <div className="flex justify-between items-center mb-2">
                                             {editingFeedId === feed.id ? (
-                                                <>
-                                                    <button onClick={() => handleSaveEdit(feed.id)} className="text-green-500 hover:text-green-400"><i className="fas fa-check"></i></button>
-                                                    <button onClick={handleCancelEdit} className="text-gray-500 hover:text-gray-400"><i className="fas fa-times"></i></button>
-                                                </>
+                                                <input 
+                                                    type="text"
+                                                    value={editingName}
+                                                    onChange={(e) => setEditingName(e.target.value)}
+                                                    className="flex-grow p-1 rounded-md bg-gray-600 border border-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                />
                                             ) : (
-                                                <button onClick={() => handleEdit(feed)} className="text-gray-400 hover:text-white"><i className="fas fa-pencil-alt"></i></button>
+                                                <span className="truncate">{feed.name}</span>
                                             )}
-                                            <button onClick={() => onDeleteFeed(feed.id)} className="text-red-500 hover:text-red-400"><i className="fas fa-trash-alt"></i></button>
+                                            <div className="flex items-center space-x-2">
+                                                {editingFeedId === feed.id ? (
+                                                    <>
+                                                        <button onClick={() => handleSaveEdit(feed.id)} className="text-green-500 hover:text-green-400"><i className="fas fa-check"></i></button>
+                                                        <button onClick={handleCancelEdit} className="text-gray-500 hover:text-gray-400"><i className="fas fa-times"></i></button>
+                                                    </>
+                                                ) : (
+                                                    <button onClick={() => handleEdit(feed)} className="text-gray-400 hover:text-white"><i className="fas fa-pencil-alt"></i></button>
+                                                )}
+                                                <button onClick={() => onDeleteFeed(feed.id)} className="text-red-500 hover:text-red-400"><i className="fas fa-trash-alt"></i></button>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center space-x-2">
+                                            <span className="text-sm text-gray-400">Folder:</span>
+                                            <select 
+                                                value={feed.folderId || ''}
+                                                onChange={(e) => handleMoveFeedToFolder(feed.id, e.target.value || null)}
+                                                className="bg-gray-600 border border-gray-500 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            >
+                                                <option value="">No folder</option>
+                                                {folders.map(folder => (
+                                                    <option key={folder.id} value={folder.id}>{folder.name}</option>
+                                                ))}
+                                            </select>
                                         </div>
                                     </li>
                                 ))}
@@ -308,7 +449,7 @@
         // Main App Component
         function App() {
             const [state, dispatch] = useReducer(reducer, initialState);
-            const { feeds, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles } = state;
+            const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles, expandedFolders } = state;
 
             // --- API Abstractions ---
             const handleSelectFeed = useCallback(async (feed) => {
@@ -353,10 +494,33 @@
                 }
             }, []);
 
+            const handleCreateFolder = useCallback(async (folderName) => {
+                const newFolder = await window.api.createFolder(folderName);
+                dispatch({ type: 'ADD_FOLDER', payload: newFolder });
+            }, []);
+
+            const handleDeleteFolder = useCallback(async (folderId) => {
+                await window.api.deleteFolder(folderId);
+                dispatch({ type: 'DELETE_FOLDER', payload: folderId });
+            }, []);
+
+            const handleMoveFeedToFolder = useCallback(async (feedId, folderId) => {
+                await window.api.moveFeedToFolder(feedId, folderId);
+                dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId, folderId } });
+            }, []);
+
+            const handleToggleFolder = useCallback((folderId) => {
+                dispatch({ type: 'TOGGLE_FOLDER', payload: folderId });
+            }, []);
+
             // --- Effects ---
             useEffect(() => {
-                window.api.getFeeds().then(allFeeds => {
+                Promise.all([
+                    window.api.getFeeds(),
+                    window.api.getFolders()
+                ]).then(([allFeeds, allFolders]) => {
                     dispatch({ type: 'SET_FEEDS', payload: allFeeds });
+                    dispatch({ type: 'SET_FOLDERS', payload: allFolders });
                 }).catch(console.error);
             }, []);
             
@@ -395,9 +559,12 @@
                         <div className="col-span-12 md:col-span-3 lg:col-span-2 overflow-hidden">
                            <FeedsPanel 
                                 feeds={feeds}
+                                folders={folders}
                                 selectedFeed={selectedFeed}
+                                expandedFolders={expandedFolders}
                                 onSelectFeed={handleSelectFeed}
                                 onShowSettings={() => dispatch({ type: 'SHOW_SETTINGS' })}
+                                onToggleFolder={handleToggleFolder}
                             />
                         </div>
                         <div className="col-span-12 md:col-span-4 lg:col-span-3 overflow-hidden">
@@ -417,11 +584,15 @@
                     </div>
                     <SettingsModal 
                         feeds={feeds}
+                        folders={folders}
                         isVisible={isSettingsVisible} 
                         onClose={() => dispatch({ type: 'HIDE_SETTINGS' })} 
                         onAddFeed={handleAddFeed}
                         onDeleteFeed={handleDeleteFeed}
                         onUpdateFeedName={handleUpdateFeedName}
+                        onCreateFolder={handleCreateFolder}
+                        onDeleteFolder={handleDeleteFolder}
+                        onMoveFeedToFolder={handleMoveFeedToFolder}
                     />
                 </>
             );

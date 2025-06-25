@@ -8,6 +8,13 @@ contextBridge.exposeInMainWorld('api', {
   addFeed: (url) => ipcRenderer.invoke('add-feed', url),
   deleteFeed: (id) => ipcRenderer.invoke('delete-feed', id),
   updateFeedDisplayName: (feedId, displayName) => ipcRenderer.invoke('update-feed-display-name', { feedId, displayName }),
+  moveFeedToFolder: (feedId, folderId) => ipcRenderer.invoke('move-feed-to-folder', { feedId, folderId }),
+
+  // Folder-related functions
+  getFolders: () => ipcRenderer.invoke('get-folders'),
+  createFolder: (name) => ipcRenderer.invoke('create-folder', name),
+  deleteFolder: (id) => ipcRenderer.invoke('delete-folder', id),
+  renameFolder: (folderId, newName) => ipcRenderer.invoke('rename-folder', { folderId, newName }),
 
   // Article-related functions
   getArticles: (feedId) => ipcRenderer.invoke('get-articles', feedId),
