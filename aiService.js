@@ -10,10 +10,12 @@ async function generateSummary(articleContent, model = 'phi3:mini') {
         allowedAttributes: {},
     });
 
-    // A clear, concise prompt for the LLM.
-    const prompt = `**SYSTEM:** You are a senior editor at a major news publication, an expert in distilling complex topics into clear, concise, and unbiased summaries for a general audience. Your task is to summarize the provided news article. Do not include any information that you would not publish to a large audience.
+    // --- NEW: Truncate content to avoid overwhelming the model ---
+    const truncatedContent = cleanContent.substring(0, 15000);
 
-**TASK:** Generate a summary of the article that adheres to the following strict guidelines:
+    const systemPrompt = `You are a senior editor at a major news publication, an expert in distilling complex topics into clear, concise, and unbiased summaries for a general audience. Your task is to summarize the provided news article. Do not include any information that you would not publish to a large audience.`;
+
+    const userPrompt = `**TASK:** Generate a summary of the article that adheres to the following strict guidelines:
 
 1.  **Headline:** Start with a short, impactful headline that captures the essence of the article. Do not use the original article's title.
 2.  **Key Takeaways:** Provide a bulleted list of the 3-4 most important takeaways from the article. Each bullet point should be a complete sentence.
@@ -25,7 +27,7 @@ async function generateSummary(articleContent, model = 'phi3:mini') {
 *   **Format:** Use Markdown for formatting. The headline should be bold, followed by the bulleted list, and then the concluding sentence.
 
 **ARTICLE:**
-${cleanContent}`;
+${truncatedContent}`;
 
     console.log(`Sending request to Ollama with model: ${model}`);
 
@@ -38,8 +40,15 @@ ${cleanContent}`;
             },
             body: JSON.stringify({
                 model: model,
-                prompt: prompt,
-                stream: false, // We want the full response at once.
+                prompt: userPrompt, // The user's direct instruction
+                system: systemPrompt, // The persona and high-level instructions
+                stream: false,
+                options: {
+                    temperature: 0.2, // Lower temperature for less "creative" and more focused output
+                    top_k: 20,        // Further constrains the model's choices
+                    top_p: 0.5,       // Further constrains the model's choices
+                    seed: 42          // For reproducible results
+                }
             }),
         });
 
@@ -51,7 +60,17 @@ ${cleanContent}`;
 
         const data = await response.json();
         console.log('Successfully received summary from Ollama.');
-        return data.response.trim(); // Return the summary text.
+        
+        const summary = data.response.trim();
+        const words = summary.split(/\s+/);
+
+        if (words.length > 200) {
+            const truncatedSummary = words.slice(0, 200).join(' ') + '...';
+            console.log(`Summary truncated from ${words.length} to 200 words.`);
+            return truncatedSummary;
+        }
+
+        return summary;
 
     } catch (error) {
         console.error('Error communicating with Ollama:', error.message);
