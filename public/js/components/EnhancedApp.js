@@ -225,12 +225,26 @@ function EnhancedApp() {
                 await window.ApiService.moveFeedToFolder(draggedItem.id, dropTarget.id);
                 dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId: draggedItem.id, folderId: dropTarget.id } });
             }
+            else if (draggedItem.type === 'feed' && dropTarget.type === 'folder-content') {
+                // Moving feed to folder content area
+                await window.ApiService.moveFeedToFolder(draggedItem.id, dropTarget.id);
+                dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId: draggedItem.id, folderId: dropTarget.id } });
+            }
+            else if (draggedItem.type === 'feed' && dropTarget.type === 'uncategorized') {
+                // Moving feed to uncategorized (remove from folder)
+                await window.ApiService.moveFeedToFolder(draggedItem.id, null);
+                dispatch({ type: 'MOVE_FEED_TO_FOLDER', payload: { feedId: draggedItem.id, folderId: null } });
+            }
             else if (draggedItem.type === 'feed' && dropTarget.type === 'feed') {
-                const targetIndex = feeds.findIndex(f => f.id === dropTarget.id);
-                await window.ApiService.reorderFeeds(draggedItem.id, targetIndex, dropTarget.folderId);
-                
-                const allFeeds = await window.ApiService.getFeeds();
-                dispatch({ type: 'SET_FEEDS', payload: allFeeds });
+                // Reordering feeds - find the target feed and use its folder context
+                const targetFeed = feeds.find(f => f.id === dropTarget.id);
+                if (targetFeed) {
+                    const targetIndex = feeds.filter(f => f.folderId === targetFeed.folderId).findIndex(f => f.id === dropTarget.id);
+                    await window.ApiService.reorderFeeds(draggedItem.id, targetIndex, targetFeed.folderId);
+                    
+                    const allFeeds = await window.ApiService.getFeeds();
+                    dispatch({ type: 'SET_FEEDS', payload: allFeeds });
+                }
             }
             else if (draggedItem.type === 'folder' && dropTarget.type === 'folder') {
                 const targetIndex = folders.findIndex(f => f.id === dropTarget.id);
