@@ -1,5 +1,5 @@
 // VirtualizedList.js - High-performance virtualized list component for large datasets
-function VirtualizedList({ 
+const VirtualizedList = React.forwardRef(({ 
     items, 
     itemHeight = 80, 
     containerHeight = 600, 
@@ -7,7 +7,7 @@ function VirtualizedList({
     overscan = 5,
     className = "",
     onScrollStateChange = null
-}) {
+}, ref) => {
     if (!window.React) {
         console.error('React not available for VirtualizedList');
         return null;
@@ -99,8 +99,20 @@ function VirtualizedList({
         }
     }, [scrollToIndex, scrollToTop]);
     
+    // Merge forwarded ref with internal ref
+    const mergedRef = useCallback((node) => {
+        scrollElementRef.current = node;
+        if (ref) {
+            if (typeof ref === 'function') {
+                ref(node);
+            } else {
+                ref.current = node;
+            }
+        }
+    }, [ref]);
+
     return React.createElement('div', {
-        ref: scrollElementRef,
+        ref: mergedRef,
         className: `overflow-auto ${className}`,
         style: { height: containerHeight },
         onScroll: handleScroll
@@ -129,7 +141,7 @@ function VirtualizedList({
             )
         )
     );
-}
+});
 
 // Performance monitoring hook for virtualized list
 function useVirtualListPerformance() {
