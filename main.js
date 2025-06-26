@@ -2,7 +2,8 @@
 
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const db = require('./database.js');
+const { DatabaseService } = require('./src/services/database/index.js');
+const dbService = DatabaseService();
 const Parser = require('rss-parser');
 const parser = new Parser();
 const { generateSummary } = require('./aiService.js');
@@ -24,7 +25,11 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Initialize optimized database connection
+  await dbService.initialize();
+  console.log('Database optimizations enabled and ready.');
+  
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -32,9 +37,9 @@ app.whenReady().then(() => {
   startAgents();
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
-    db.close();
+    await dbService.close();
     app.quit();
   }
 });
@@ -45,30 +50,12 @@ const AGENT_CYCLE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 async function runFetcherAgent() {
     console.log('[Fetcher Agent] Running...');
-    const feeds = await new Promise((resolve, reject) => {
-        db.all("SELECT * FROM feeds", [], (err, rows) => {
-            if (err) return reject(err);
-            resolve(rows);
-        });
-    });
+    const feeds = await dbService.feeds.getAll();
 
     for (const feed of feeds) {
         try {
             const parsedFeed = await parser.parseURL(feed.url);
-            const stmt = db.prepare("INSERT OR IGNORE INTO articles (feedId, title, link, pubDate, content, status) VALUES (?, ?, ?, ?, ?, 'new')");
-            
-            let newArticles = [];
-            for (const item of parsedFeed.items) {
-                const wasInserted = await new Promise((resolve, reject) => {
-                    stmt.run(feed.id, item.title, item.link, item.isoDate || new Date().toISOString(), item.contentSnippet || item.content || '', function(err) {
-                        if (err) return reject(err);
-                        resolve(this.changes > 0);
-                    });
-                });
-                if (wasInserted) newArticles.push(item.title);
-            }
-
-            await new Promise(resolve => stmt.finalize(resolve));
+            const newArticles = await dbService.articles.insertNew(feed.id, parsedFeed.items);
 
             if (newArticles.length > 0) {
                 console.log(`[Fetcher Agent] Found ${newArticles.length} new articles for ${feed.name}`);
@@ -87,12 +74,7 @@ async function runSummarizerAgent() {
     let articlesToSummarize;
 
     do {
-        articlesToSummarize = await new Promise((resolve, reject) => {
-            db.all("SELECT * FROM articles WHERE status = 'new' LIMIT 5", [], (err, rows) => {
-                if (err) return reject(err);
-                resolve(rows);
-            });
-        });
+        articlesToSummarize = await dbService.articles.getToSummarize(5);
 
         if (articlesToSummarize.length > 0) {
             console.log(`[Summarizer Agent] Found a batch of ${articlesToSummarize.length} articles to summarize.`);
@@ -127,44 +109,50 @@ function startAgents() {
 }
 
 async function updateArticleStatus(articleId, status, summary = null) {
-    return new Promise((resolve, reject) => {
-        const query = summary 
-            ? "UPDATE articles SET status = ?, summary = ? WHERE id = ?"
-            : "UPDATE articles SET status = ? WHERE id = ?";
-        const params = summary ? [status, summary, articleId] : [status, articleId];
-
-        db.run(query, params, (err) => {
-            if (err) return reject(err);
-            if (mainWindow) mainWindow.webContents.send('article-status-updated', { articleId, status, summary });
-            resolve();
-        });
-    });
+    await dbService.articles.updateStatus(articleId, status, summary);
+    if (mainWindow) mainWindow.webContents.send('article-status-updated', { articleId, status, summary });
 }
 
 // --- IPC Handlers ---
 
 ipcMain.handle('get-feeds', async () => {
-    return new Promise((resolve, reject) => {
-        db.all("SELECT *, COALESCE(displayName, name) as name FROM feeds ORDER BY name", [], (err, rows) => {
-            if (err) reject(err);
-            resolve(rows);
-        });
-    });
+    return await dbService.feeds.getAll();
+});
+
+ipcMain.handle('get-folders', async () => {
+    return await dbService.folders.getAll();
+});
+
+ipcMain.handle('create-folder', async (event, folderName) => {
+    return await dbService.folders.create(folderName);
+});
+
+ipcMain.handle('delete-folder', async (event, folderId) => {
+    return await dbService.folders.delete(folderId);
+});
+
+ipcMain.handle('rename-folder', async (event, { folderId, newName }) => {
+    return await dbService.folders.rename(folderId, newName);
+});
+
+ipcMain.handle('move-feed-to-folder', async (event, { feedId, folderId }) => {
+    return await dbService.feeds.moveToFolder(feedId, folderId);
+});
+
+ipcMain.handle('reorder-feeds', async (event, { feedId, newIndex, targetFolderId }) => {
+    return await dbService.feeds.reorder(feedId, newIndex, targetFolderId);
+});
+
+ipcMain.handle('reorder-folders', async (event, { folderId, newIndex }) => {
+    return await dbService.folders.reorder(folderId, newIndex);
 });
 
 ipcMain.handle('add-feed', async (event, feedUrl) => {
     try {
         const feed = await parser.parseURL(feedUrl);
         const feedName = feed.title;
-        const newFeedId = await new Promise((resolve, reject) => {
-            const stmt = db.prepare("INSERT INTO feeds (name, url) VALUES (?, ?)");
-            stmt.run(feedName, feedUrl, function (err) {
-                if (err) return reject(new Error("Failed to add feed. It may already exist."));
-                resolve(this.lastID);
-            });
-            stmt.finalize();
-        });
-        const newFeed = { id: newFeedId, name: feedName, url: feedUrl };
+        const newFeedId = await dbService.feeds.add(feedName, feedUrl);
+        const newFeed = { id: newFeedId, name: feedName, url: feedUrl, orderIndex: 0 };
         runAgentCycle();
         return newFeed;
     } catch (error) {
@@ -173,44 +161,23 @@ ipcMain.handle('add-feed', async (event, feedUrl) => {
 });
 
 ipcMain.handle('delete-feed', async (event, feedId) => {
-    return new Promise((resolve, reject) => {
-        db.run("DELETE FROM feeds WHERE id = ?", [feedId], (err) => {
-            if (err) reject(err);
-            resolve({ success: true, id: feedId });
-        });
-    });
+    return await dbService.feeds.delete(feedId);
 });
 
 ipcMain.handle('update-feed-display-name', async (event, { feedId, displayName }) => {
-    return new Promise((resolve, reject) => {
-        db.run("UPDATE feeds SET displayName = ? WHERE id = ?", [displayName, feedId], (err) => {
-            if (err) reject(err);
-            resolve({ success: true });
-        });
-    });
+    return await dbService.feeds.updateDisplayName(feedId, displayName);
 });
 
 ipcMain.handle('get-articles', async (event, feedId) => {
-    return new Promise((resolve, reject) => {
-        const sql = "SELECT id, feedId, title, link, pubDate, isRead, summary, status FROM articles WHERE feedId = ? ORDER BY pubDate DESC";
-        db.all(sql, [feedId], (err, rows) => {
-            if (err) reject(err);
-            resolve(rows);
-        });
-    });
+    return await dbService.articles.getByFeedId(feedId);
 });
 
 ipcMain.handle('mark-article-as-read', async (event, articleId) => {
-    return new Promise((resolve, reject) => {
-        db.run("UPDATE articles SET isRead = 1 WHERE id = ?", [articleId], (err) => {
-            if (err) reject(err);
-            resolve({ success: true });
-        });
-    });
+    return await dbService.articles.markAsRead(articleId);
 });
 
 ipcMain.handle('retry-summarization', async (event, articleId) => {
-    await updateArticleStatus(articleId, 'new');
+    await dbService.articles.updateStatus(articleId, 'new');
     runSummarizerAgent();
     return { success: true };
 });
