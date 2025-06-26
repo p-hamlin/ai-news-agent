@@ -200,11 +200,14 @@ function EnhancedApp() {
         dispatch({ type: 'TOGGLE_FOLDER', payload: folderId });
     }, [dispatch]);
 
-    const handleDragStart = useCallback((item) => {
+    const handleDragStart = useCallback((e, item) => {
+        e.dataTransfer.effectAllowed = 'move';
         dispatch({ type: 'SET_DRAGGED_ITEM', payload: item });
     }, [dispatch]);
 
-    const handleDragOver = useCallback((item) => {
+    const handleDragOver = useCallback((e, item) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
         dispatch({ type: 'SET_DRAG_OVER_ITEM', payload: item });
     }, [dispatch]);
 
@@ -213,7 +216,8 @@ function EnhancedApp() {
         dispatch({ type: 'SET_DRAG_OVER_ITEM', payload: null });
     }, [dispatch]);
 
-    const handleDrop = useCallback(async (dropTarget) => {
+    const handleDrop = useCallback(async (e, dropTarget) => {
+        e.preventDefault();
         if (!draggedItem || !dropTarget) return;
 
         try {

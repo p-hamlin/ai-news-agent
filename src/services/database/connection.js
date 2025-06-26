@@ -341,16 +341,30 @@ class DatabaseConnection {
         });
     }
 
-    // Transaction support
+    // Transaction support with nested transaction handling
     async transaction(operation) {
-        await this.run('BEGIN TRANSACTION');
+        // Check if we're already in a transaction by trying to start one
         try {
-            const result = await operation();
-            await this.run('COMMIT');
-            return result;
+            await this.run('BEGIN TRANSACTION');
+            // If we get here, we successfully started a new transaction
+            try {
+                const result = await operation();
+                await this.run('COMMIT');
+                return result;
+            } catch (error) {
+                await this.run('ROLLBACK');
+                throw error;
+            }
         } catch (error) {
-            await this.run('ROLLBACK');
-            throw error;
+            // If BEGIN TRANSACTION fails, we're likely already in a transaction
+            if (error.message && error.message.includes('cannot start a transaction within a transaction')) {
+                // Just execute the operation without transaction wrapper
+                console.warn('[Database] Nested transaction detected, executing without transaction wrapper');
+                return await operation();
+            } else {
+                // Some other error occurred
+                throw error;
+            }
         }
     }
 
