@@ -1,5 +1,8 @@
 // FeedsPanel.js
 function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem, dragOverItem, onSelectFeed, onShowSettings, onToggleFolder, onDragStart, onDragOver, onDragEnd, onDrop }) {
+    const [editingFeed, setEditingFeed] = React.useState(null);
+    const [editValue, setEditValue] = React.useState('');
+
     // Organize feeds by folder
     const feedsByFolder = feeds.reduce((acc, feed) => {
         const folderId = feed.folderId || 'uncategorized';
@@ -8,27 +11,84 @@ function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem
         return acc;
     }, {});
 
+    const handleEditFeed = (feed, e) => {
+        e.stopPropagation();
+        setEditingFeed(feed.id);
+        setEditValue(feed.name);
+    };
+
+    const handleSaveEdit = async (feedId) => {
+        if (editValue.trim() && editValue !== feeds.find(f => f.id === feedId)?.name) {
+            try {
+                await window.api.updateFeedDisplayName(feedId, editValue.trim());
+                // Trigger refresh of feeds
+                window.location.reload();
+            } catch (error) {
+                console.error('Failed to update feed name:', error);
+            }
+        }
+        setEditingFeed(null);
+        setEditValue('');
+    };
+
+    const handleCancelEdit = () => {
+        setEditingFeed(null);
+        setEditValue('');
+    };
+
+    const handleKeyPress = (e, feedId) => {
+        if (e.key === 'Enter') {
+            handleSaveEdit(feedId);
+        } else if (e.key === 'Escape') {
+            handleCancelEdit();
+        }
+    };
+
     const renderFeed = (feed, folderContext = null) => {
         const isDragging = draggedItem?.type === 'feed' && draggedItem?.id === feed.id;
         const isDragOver = dragOverItem?.type === 'feed' && dragOverItem?.id === feed.id;
+        const isEditing = editingFeed === feed.id;
         
         return React.createElement('li', {
             key: feed.id,
-            draggable: true,
-            className: `p-2 rounded-md cursor-pointer mb-1 ml-4 transition-all duration-200 ${
+            draggable: !isEditing,
+            className: `p-2 rounded-md mb-1 ml-4 transition-all duration-200 ${
                 selectedFeed?.id === feed.id ? 'bg-blue-600' : 'hover:bg-gray-700'
             } ${isDragging ? 'opacity-50 scale-95' : ''} ${
                 isDragOver ? 'border-2 border-blue-400 border-dashed' : ''
-            }`,
-            onClick: () => onSelectFeed(feed),
-            onDragStart: (e) => onDragStart(e, { type: 'feed', id: feed.id, data: feed }),
-            onDragOver: (e) => onDragOver(e, { type: 'feed', id: feed.id, folderContext }),
-            onDragEnd: onDragEnd,
-            onDrop: (e) => onDrop(e, { type: 'feed', id: feed.id, folderContext })
+            } ${isEditing ? 'bg-gray-700' : 'cursor-pointer'}`,
+            onClick: isEditing ? undefined : () => onSelectFeed(feed),
+            onDragStart: isEditing ? undefined : (e) => onDragStart(e, { type: 'feed', id: feed.id, data: feed }),
+            onDragOver: isEditing ? undefined : (e) => onDragOver(e, { type: 'feed', id: feed.id, folderContext }),
+            onDragEnd: isEditing ? undefined : onDragEnd,
+            onDrop: isEditing ? undefined : (e) => onDrop(e, { type: 'feed', id: feed.id, folderContext })
         },
-            React.createElement('i', { className: "fas fa-grip-vertical text-xs mr-2 text-gray-500" }),
-            React.createElement('i', { className: "fas fa-rss text-xs mr-2 text-gray-400" }),
-            feed.name
+            React.createElement('div', { className: "flex items-center justify-between group" },
+                React.createElement('div', { className: "flex items-center flex-1" },
+                    React.createElement('i', { className: "fas fa-grip-vertical text-xs mr-2 text-gray-500" }),
+                    React.createElement('i', { className: "fas fa-rss text-xs mr-2 text-gray-400" }),
+                    isEditing ? 
+                        React.createElement('input', {
+                            type: 'text',
+                            value: editValue,
+                            onChange: (e) => setEditValue(e.target.value),
+                            onKeyDown: (e) => handleKeyPress(e, feed.id),
+                            onBlur: () => handleSaveEdit(feed.id),
+                            className: "bg-gray-600 text-white text-sm px-2 py-1 rounded border-none outline-none flex-1",
+                            autoFocus: true
+                        }) :
+                        React.createElement('span', { className: "flex-1" }, feed.name)
+                ),
+                !isEditing && React.createElement('div', { className: "opacity-0 group-hover:opacity-100 flex items-center" },
+                    React.createElement('button', {
+                        onClick: (e) => handleEditFeed(feed, e),
+                        className: "text-gray-400 hover:text-white text-xs ml-2 p-1",
+                        title: "Rename feed"
+                    },
+                        React.createElement('i', { className: "fas fa-edit" })
+                    )
+                )
+            )
         );
     };
 
