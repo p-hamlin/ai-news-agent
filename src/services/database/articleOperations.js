@@ -59,6 +59,149 @@ const ArticleOperations = (dbConnection) => {
             return await dbConnection.getPrepared('articles.getById', [articleId]);
         },
 
+        // Search articles using full-text search
+        async search(query, options = {}) {
+            const limit = options.limit || 50;
+            const sanitizedQuery = query.trim().replace(/['"]/g, '');
+            
+            if (!sanitizedQuery) {
+                return [];
+            }
+
+            // Build FTS5 query - supports phrase queries, AND/OR operators
+            let ftsQuery = sanitizedQuery;
+            
+            // If it contains multiple words without operators, treat as phrase search
+            if (sanitizedQuery.includes(' ') && !sanitizedQuery.match(/\b(AND|OR|NOT)\b/i)) {
+                ftsQuery = `"${sanitizedQuery}"`;
+            }
+
+            try {
+                return await dbConnection.allPrepared('articles.search', [ftsQuery, limit]);
+            } catch (error) {
+                console.error('Search error:', error.message);
+                // Fallback to simple term search if phrase search fails
+                try {
+                    const termQuery = sanitizedQuery.split(' ').join(' AND ');
+                    return await dbConnection.allPrepared('articles.search', [termQuery, limit]);
+                } catch (fallbackError) {
+                    console.error('Fallback search error:', fallbackError.message);
+                    return [];
+                }
+            }
+        },
+
+        // Advanced search with filters
+        async searchWithFilters(query, filters = {}) {
+            const limit = filters.limit || 50;
+            const sanitizedQuery = query ? query.trim().replace(/['"]/g, '') : '';
+            
+            let sql, params;
+            
+            if (sanitizedQuery) {
+                // Full-text search with filters
+                let ftsQuery = sanitizedQuery;
+                if (sanitizedQuery.includes(' ') && !sanitizedQuery.match(/\b(AND|OR|NOT)\b/i)) {
+                    ftsQuery = `"${sanitizedQuery}"`;
+                }
+                
+                sql = `SELECT a.*, f.name as feedName, f.displayName as feedDisplayName,
+                       COALESCE(f.displayName, f.name) as feedNameDisplay,
+                       snippet(articles_fts, 1, '<mark>', '</mark>', '...', 32) as titleSnippet,
+                       snippet(articles_fts, 2, '<mark>', '</mark>', '...', 64) as contentSnippet,
+                       snippet(articles_fts, 3, '<mark>', '</mark>', '...', 32) as summarySnippet,
+                       bm25(articles_fts) as relevance
+                       FROM articles_fts 
+                       JOIN articles a ON a.id = articles_fts.article_id
+                       JOIN feeds f ON f.id = a.feedId
+                       WHERE articles_fts MATCH ?`;
+                params = [ftsQuery];
+            } else {
+                // Filter-only search
+                sql = `SELECT a.*, f.name as feedName, f.displayName as feedDisplayName,
+                       COALESCE(f.displayName, f.name) as feedNameDisplay,
+                       null as titleSnippet, null as contentSnippet, null as summarySnippet,
+                       0 as relevance
+                       FROM articles a
+                       JOIN feeds f ON f.id = a.feedId
+                       WHERE 1=1`;
+                params = [];
+            }
+
+            // Add filters
+            if (filters.feedIds && filters.feedIds.length > 0) {
+                const placeholders = filters.feedIds.map(() => '?').join(',');
+                sql += ` AND a.feedId IN (${placeholders})`;
+                params.push(...filters.feedIds);
+            }
+
+            if (filters.isRead !== undefined) {
+                sql += ` AND a.isRead = ?`;
+                params.push(filters.isRead ? 1 : 0);
+            }
+
+            if (filters.status) {
+                sql += ` AND a.status = ?`;
+                params.push(filters.status);
+            }
+
+            if (filters.dateFrom) {
+                sql += ` AND a.pubDate >= ?`;
+                params.push(filters.dateFrom);
+            }
+
+            if (filters.dateTo) {
+                sql += ` AND a.pubDate <= ?`;
+                params.push(filters.dateTo);
+            }
+
+            // Add ordering
+            if (sanitizedQuery) {
+                sql += ` ORDER BY relevance, a.pubDate DESC`;
+            } else {
+                sql += ` ORDER BY a.pubDate DESC`;
+            }
+
+            sql += ` LIMIT ?`;
+            params.push(limit);
+
+            try {
+                return await dbConnection.all(sql, params);
+            } catch (error) {
+                console.error('Advanced search error:', error.message);
+                return [];
+            }
+        },
+
+        // Get search suggestions based on article titles and feed names
+        async getSearchSuggestions(partialQuery, limit = 10) {
+            if (!partialQuery || partialQuery.length < 2) {
+                return [];
+            }
+
+            const query = `${partialQuery}*`; // Prefix search
+            
+            try {
+                const results = await dbConnection.all(`
+                    SELECT DISTINCT 
+                        CASE 
+                            WHEN title LIKE ? THEN title
+                            WHEN feed_name LIKE ? THEN feed_name
+                            ELSE substr(title, 1, 50) || '...'
+                        END as suggestion,
+                        'article' as type
+                    FROM articles_fts 
+                    WHERE articles_fts MATCH ?
+                    LIMIT ?
+                `, [`%${partialQuery}%`, `%${partialQuery}%`, query, limit]);
+                
+                return results;
+            } catch (error) {
+                console.error('Search suggestions error:', error.message);
+                return [];
+            }
+        },
+
         // Clean up old articles (optimized with index and transaction)
         async cleanup(retentionDays = 30) {
             const cutoffDate = new Date();

@@ -15,7 +15,7 @@ function EnhancedApp() {
             getReport: () => null
         };
     const { measureRender, endMeasurement, recordInteraction, getReport } = performanceHooks;
-    const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles, expandedFolders, draggedItem, dragOverItem } = state;
+    const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles, expandedFolders, draggedItem, dragOverItem, isSearchVisible, searchResults, searchQuery } = state;
     
     // Performance optimization settings
     const [useVirtualization, setUseVirtualization] = useState(true);
@@ -173,6 +173,27 @@ function EnhancedApp() {
             }
         }
     }, [recordInteraction, isDevelopmentMode]);
+
+    // Search handlers
+    const handleToggleSearch = useCallback(() => {
+        dispatch({ type: 'TOGGLE_SEARCH' });
+        recordInteraction('toggle-search', 0, { isSearchVisible });
+    }, [dispatch, recordInteraction, isSearchVisible]);
+
+    const handleSearchResults = useCallback((results) => {
+        dispatch({ type: 'SET_SEARCH_RESULTS', payload: results });
+        if (results.length > 0) {
+            // Auto-select first result if no article is selected
+            if (!selectedArticle || !isSearchVisible) {
+                dispatch({ type: 'SELECT_ARTICLE', payload: results[0] });
+            }
+        }
+    }, [dispatch, selectedArticle, isSearchVisible]);
+
+    const handleSearchArticleSelect = useCallback((article) => {
+        dispatch({ type: 'SELECT_ARTICLE', payload: article });
+        recordInteraction('select-search-result', 0, { articleId: article.id });
+    }, [dispatch, recordInteraction]);
 
     // Drag and drop handlers (optimized)
     const handleToggleFolder = useCallback((folderId) => {
@@ -354,47 +375,72 @@ function EnhancedApp() {
                 className: "bg-gray-800 border-b border-gray-700 p-2"
             }, renderPerformanceSettings()),
             
-            // Main content
-            React.createElement('div', { className: "flex-1 grid grid-cols-1 md:grid-cols-12 overflow-hidden" },
-                // Feeds panel
-                React.createElement('div', { className: "col-span-12 md:col-span-3 lg:col-span-2 overflow-hidden" },
-                    React.createElement(window.FeedsPanel, {
-                        feeds,
-                        folders,
-                        selectedFeed,
-                        expandedFolders,
-                        draggedItem,
-                        dragOverItem,
-                        onSelectFeed: handleSelectFeed,
-                        onShowSettings: () => dispatch({ type: 'SHOW_SETTINGS' }),
-                        onToggleFolder: handleToggleFolder,
-                        onDragStart: handleDragStart,
-                        onDragOver: handleDragOver,
-                        onDragEnd: handleDragEnd,
-                        onDrop: handleDrop
-                    })
-                ),
+            // Main content with search integration
+            React.createElement('div', { className: "flex-1 flex overflow-hidden" },
+                // Search Panel (conditionally rendered)
+                isSearchVisible && React.createElement(window.SearchPanel, {
+                    feeds,
+                    onSearchResults: handleSearchResults,
+                    isVisible: isSearchVisible,
+                    onToggle: handleToggleSearch
+                }),
                 
-                // Articles panel (enhanced or standard)
-                React.createElement('div', { className: "col-span-12 md:col-span-4 lg:col-span-3 overflow-hidden" },
-                    useVirtualization ? 
-                        React.createElement(window.EnhancedArticlesPanel, {
-                            articles,
-                            selectedArticle,
-                            onSelectArticle: handleSelectArticle,
-                            isLoading: isLoadingArticles,
-                            enableVirtualization: true
-                        }) :
-                        React.createElement(window.ArticlesPanel, {
-                            articles,
-                            selectedArticle,
-                            onSelectArticle: handleSelectArticle,
-                            isLoading: isLoadingArticles
+                // Search Results Panel (when search is active)
+                isSearchVisible && searchResults.length > 0 && React.createElement(window.SearchResultsPanel, {
+                    searchResults,
+                    selectedArticle,
+                    onArticleSelect: handleSearchArticleSelect,
+                    isVisible: isSearchVisible
+                }),
+                
+                // Main content area
+                React.createElement('div', { 
+                    className: `flex-1 grid grid-cols-1 md:grid-cols-12 overflow-hidden ${
+                        isSearchVisible ? 'opacity-75' : ''
+                    }` 
+                },
+                    // Feeds panel
+                    React.createElement('div', { className: "col-span-12 md:col-span-3 lg:col-span-2 overflow-hidden" },
+                        React.createElement(window.FeedsPanel, {
+                            feeds,
+                            folders,
+                            selectedFeed,
+                            expandedFolders,
+                            draggedItem,
+                            dragOverItem,
+                            onSelectFeed: handleSelectFeed,
+                            onShowSettings: () => dispatch({ type: 'SHOW_SETTINGS' }),
+                            onToggleSearch: handleToggleSearch,
+                            onToggleFolder: handleToggleFolder,
+                            onDragStart: handleDragStart,
+                            onDragOver: handleDragOver,
+                            onDragEnd: handleDragEnd,
+                            onDrop: handleDrop
                         })
-                ),
-                
-                // Content panel (lazy or standard)
-                React.createElement('div', { className: "col-span-12 md:col-span-5 lg:col-span-7 overflow-hidden" },
+                    ),
+                    
+                    // Articles panel (enhanced or standard) - hide when search is active
+                    !isSearchVisible && React.createElement('div', { className: "col-span-12 md:col-span-4 lg:col-span-3 overflow-hidden" },
+                        useVirtualization ? 
+                            React.createElement(window.EnhancedArticlesPanel, {
+                                articles,
+                                selectedArticle,
+                                onSelectArticle: handleSelectArticle,
+                                isLoading: isLoadingArticles,
+                                enableVirtualization: true
+                            }) :
+                            React.createElement(window.ArticlesPanel, {
+                                articles,
+                                selectedArticle,
+                                onSelectArticle: handleSelectArticle,
+                                isLoading: isLoadingArticles
+                            })
+                    ),
+                    
+                    // Content panel (lazy or standard)
+                    React.createElement('div', { 
+                        className: `col-span-12 ${isSearchVisible ? 'md:col-span-9 lg:col-span-10' : 'md:col-span-5 lg:col-span-7'} overflow-hidden` 
+                    },
                     useLazyContent ?
                         React.createElement(window.LazyContentPanel, {
                             article: selectedArticle,
@@ -404,6 +450,7 @@ function EnhancedApp() {
                             article: selectedArticle,
                             onRetrySummarization: handleRetrySummarization
                         })
+                    )
                 )
             ),
             

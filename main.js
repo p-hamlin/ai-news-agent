@@ -294,6 +294,33 @@ ipcMain.handle('clear-feed-failure-tracking', async (event, { feedId, feedUrl })
     return { success: true };
 });
 
+ipcMain.handle('search-articles', async (event, { query, options = {} }) => {
+    try {
+        return await dbService.articles.search(query, options);
+    } catch (error) {
+        console.error('Search error:', error.message);
+        return [];
+    }
+});
+
+ipcMain.handle('search-articles-with-filters', async (event, { query, filters = {} }) => {
+    try {
+        return await dbService.articles.searchWithFilters(query, filters);
+    } catch (error) {
+        console.error('Advanced search error:', error.message);
+        return [];
+    }
+});
+
+ipcMain.handle('get-search-suggestions', async (event, { partialQuery, limit = 10 }) => {
+    try {
+        return await dbService.articles.getSearchSuggestions(partialQuery, limit);
+    } catch (error) {
+        console.error('Search suggestions error:', error.message);
+        return [];
+    }
+});
+
 ipcMain.handle('force-feed-refresh', async () => {
     console.log('[Manual Refresh] Starting forced feed refresh...');
     await runFetcherAgent();

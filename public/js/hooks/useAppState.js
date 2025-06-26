@@ -13,6 +13,9 @@ function useAppState() {
         expandedFolders: new Set(),
         draggedItem: null,
         dragOverItem: null,
+        isSearchVisible: false,
+        searchResults: [],
+        searchQuery: '',
     };
 
     function reducer(state, action) {
@@ -78,6 +81,24 @@ function useAppState() {
                 return { ...state, isSettingsVisible: true };
             case 'HIDE_SETTINGS':
                 return { ...state, isSettingsVisible: false };
+            case 'TOGGLE_SEARCH':
+                return { 
+                    ...state, 
+                    isSearchVisible: !state.isSearchVisible,
+                    searchResults: !state.isSearchVisible ? [] : state.searchResults,
+                    searchQuery: !state.isSearchVisible ? '' : state.searchQuery 
+                };
+            case 'SET_SEARCH_RESULTS':
+                return { ...state, searchResults: action.payload };
+            case 'SET_SEARCH_QUERY':
+                return { ...state, searchQuery: action.payload };
+            case 'CLEAR_SEARCH':
+                return { 
+                    ...state, 
+                    searchResults: [], 
+                    searchQuery: '', 
+                    isSearchVisible: false 
+                };
             default:
                 return state;
         }

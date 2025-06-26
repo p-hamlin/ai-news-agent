@@ -1,5 +1,5 @@
 // FeedsPanel.js
-function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem, dragOverItem, onSelectFeed, onShowSettings, onToggleFolder, onDragStart, onDragOver, onDragEnd, onDrop }) {
+function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem, dragOverItem, onSelectFeed, onShowSettings, onToggleSearch, onToggleFolder, onDragStart, onDragOver, onDragEnd, onDrop }) {
     const [editingFeed, setEditingFeed] = React.useState(null);
     const [editValue, setEditValue] = React.useState('');
 
@@ -133,11 +133,33 @@ function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem
     return React.createElement('div', { className: "bg-gray-800 h-full flex flex-col p-4" },
         React.createElement('div', { className: "flex justify-between items-center mb-4" },
             React.createElement('h2', { className: "text-xl font-bold" }, "Feeds"),
-            React.createElement('button', { 
-                onClick: onShowSettings, 
-                className: "text-gray-400 hover:text-white transition-colors" 
-            },
-                React.createElement('i', { className: "fas fa-cog" })
+            React.createElement('div', { className: "flex space-x-2" },
+                React.createElement('button', { 
+                    onClick: onToggleSearch, 
+                    className: "text-gray-400 hover:text-white transition-colors",
+                    title: "Search Articles"
+                },
+                    React.createElement('svg', { 
+                        className: "w-5 h-5",
+                        fill: "none",
+                        stroke: "currentColor",
+                        viewBox: "0 0 24 24"
+                    },
+                        React.createElement('path', {
+                            strokeLinecap: "round",
+                            strokeLinejoin: "round",
+                            strokeWidth: 2,
+                            d: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                        })
+                    )
+                ),
+                React.createElement('button', { 
+                    onClick: onShowSettings, 
+                    className: "text-gray-400 hover:text-white transition-colors",
+                    title: "Settings"
+                },
+                    React.createElement('i', { className: "fas fa-cog" })
+                )
             )
         ),
         React.createElement('div', { className: "flex-grow overflow-y-auto" },
