@@ -59,6 +59,19 @@ const ApiService = {
         return await window.api.retrySummarization(articleId);
     },
 
+    // Search operations
+    async searchArticles(query, options) {
+        return await window.api.searchArticles(query, options);
+    },
+
+    async searchArticlesWithFilters(query, filters) {
+        return await window.api.searchArticlesWithFilters(query, filters);
+    },
+
+    async getSearchSuggestions(partialQuery, limit) {
+        return await window.api.getSearchSuggestions(partialQuery, limit);
+    },
+
     // Event listeners
     onArticlesUpdated(callback) {
         return window.api.onArticlesUpdated(callback);

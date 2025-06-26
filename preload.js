@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('api', {
   markArticleAsRead: (articleId) => ipcRenderer.invoke('mark-article-as-read', articleId),
   retrySummarization: (articleId) => ipcRenderer.invoke('retry-summarization', articleId),
 
+  // Search functions
+  searchArticles: (query, options) => ipcRenderer.invoke('search-articles', { query, options }),
+  searchArticlesWithFilters: (query, filters) => ipcRenderer.invoke('search-articles-with-filters', { query, filters }),
+  getSearchSuggestions: (partialQuery, limit) => ipcRenderer.invoke('get-search-suggestions', { partialQuery, limit }),
+
   // Listener for real-time updates from the main process
   onArticlesUpdated: (callback) => {
     const listener = (event, ...args) => callback(...args);

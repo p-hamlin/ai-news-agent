@@ -106,6 +106,9 @@ class DatabaseConnection {
 
         // Add missing columns if they don't exist
         await this.addMissingColumns();
+        
+        // Create full-text search virtual table
+        await this.createSearchTables();
     }
 
     async addMissingColumns() {
@@ -122,6 +125,52 @@ class DatabaseConnection {
         await addColumnIfMissing('feeds', 'folderId', 'INTEGER');
         await addColumnIfMissing('feeds', 'orderIndex', 'INTEGER DEFAULT 0');
         await addColumnIfMissing('folders', 'orderIndex', 'INTEGER DEFAULT 0');
+    }
+
+    async createSearchTables() {
+        // Create FTS5 virtual table for article search
+        await this.run(`CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+            article_id UNINDEXED,
+            title,
+            content,
+            summary,
+            feed_name,
+            content='',
+            contentless_delete=1
+        )`);
+
+        // Create triggers to keep FTS table synchronized with articles table
+        await this.run(`CREATE TRIGGER IF NOT EXISTS articles_fts_insert AFTER INSERT ON articles BEGIN
+            INSERT INTO articles_fts(article_id, title, content, summary, feed_name)
+            SELECT NEW.id, NEW.title, NEW.content, NEW.summary, feeds.name
+            FROM feeds WHERE feeds.id = NEW.feedId;
+        END`);
+
+        await this.run(`CREATE TRIGGER IF NOT EXISTS articles_fts_update AFTER UPDATE ON articles BEGIN
+            UPDATE articles_fts SET
+                title = NEW.title,
+                content = NEW.content,
+                summary = NEW.summary,
+                feed_name = (SELECT name FROM feeds WHERE id = NEW.feedId)
+            WHERE article_id = NEW.id;
+        END`);
+
+        await this.run(`CREATE TRIGGER IF NOT EXISTS articles_fts_delete AFTER DELETE ON articles BEGIN
+            DELETE FROM articles_fts WHERE article_id = OLD.id;
+        END`);
+
+        // Populate FTS table with existing data if empty
+        const ftsCount = await this.get('SELECT COUNT(*) as count FROM articles_fts');
+        const articlesCount = await this.get('SELECT COUNT(*) as count FROM articles');
+        
+        if (ftsCount.count === 0 && articlesCount.count > 0) {
+            console.log('Populating search index with existing articles...');
+            await this.run(`INSERT INTO articles_fts(article_id, title, content, summary, feed_name)
+                SELECT a.id, a.title, a.content, a.summary, f.name
+                FROM articles a
+                JOIN feeds f ON f.id = a.feedId`);
+            console.log(`Search index populated with ${articlesCount.count} articles.`);
+        }
     }
 
     async createIndexes() {
@@ -166,6 +215,32 @@ class DatabaseConnection {
             'articles.updateStatus': 'UPDATE articles SET status = ?, summary = ? WHERE id = ?',
             'articles.markAsRead': 'UPDATE articles SET isRead = 1 WHERE id = ?',
             'articles.getById': 'SELECT * FROM articles WHERE id = ?',
+            'articles.search': `SELECT a.*, f.name as feedName, f.displayName as feedDisplayName, 
+                                COALESCE(f.displayName, f.name) as feedNameDisplay,
+                                snippet(articles_fts, 1, '<mark>', '</mark>', '...', 32) as titleSnippet,
+                                snippet(articles_fts, 2, '<mark>', '</mark>', '...', 64) as contentSnippet,
+                                snippet(articles_fts, 3, '<mark>', '</mark>', '...', 32) as summarySnippet,
+                                bm25(articles_fts) as relevance
+                                FROM articles_fts 
+                                JOIN articles a ON a.id = articles_fts.article_id
+                                JOIN feeds f ON f.id = a.feedId
+                                WHERE articles_fts MATCH ? 
+                                ORDER BY relevance LIMIT ?`,
+            'articles.searchWithFilters': `SELECT a.*, f.name as feedName, f.displayName as feedDisplayName,
+                                          COALESCE(f.displayName, f.name) as feedNameDisplay,
+                                          snippet(articles_fts, 1, '<mark>', '</mark>', '...', 32) as titleSnippet,
+                                          snippet(articles_fts, 2, '<mark>', '</mark>', '...', 64) as contentSnippet,
+                                          snippet(articles_fts, 3, '<mark>', '</mark>', '...', 32) as summarySnippet,
+                                          bm25(articles_fts) as relevance
+                                          FROM articles_fts 
+                                          JOIN articles a ON a.id = articles_fts.article_id
+                                          JOIN feeds f ON f.id = a.feedId
+                                          WHERE articles_fts MATCH ?`,
+            'articles.getWithFilters': `SELECT a.*, f.name as feedName, f.displayName as feedDisplayName,
+                                       COALESCE(f.displayName, f.name) as feedNameDisplay
+                                       FROM articles a
+                                       JOIN feeds f ON f.id = a.feedId
+                                       WHERE 1=1`,
             
             // Feed operations
             'feeds.getAll': 'SELECT *, COALESCE(displayName, name) as name FROM feeds ORDER BY orderIndex ASC, name ASC',
@@ -266,16 +341,30 @@ class DatabaseConnection {
         });
     }
 
-    // Transaction support
+    // Transaction support with nested transaction handling
     async transaction(operation) {
-        await this.run('BEGIN TRANSACTION');
+        // Check if we're already in a transaction by trying to start one
         try {
-            const result = await operation();
-            await this.run('COMMIT');
-            return result;
+            await this.run('BEGIN TRANSACTION');
+            // If we get here, we successfully started a new transaction
+            try {
+                const result = await operation();
+                await this.run('COMMIT');
+                return result;
+            } catch (error) {
+                await this.run('ROLLBACK');
+                throw error;
+            }
         } catch (error) {
-            await this.run('ROLLBACK');
-            throw error;
+            // If BEGIN TRANSACTION fails, we're likely already in a transaction
+            if (error.message && error.message.includes('cannot start a transaction within a transaction')) {
+                // Just execute the operation without transaction wrapper
+                console.warn('[Database] Nested transaction detected, executing without transaction wrapper');
+                return await operation();
+            } else {
+                // Some other error occurred
+                throw error;
+            }
         }
     }
 
