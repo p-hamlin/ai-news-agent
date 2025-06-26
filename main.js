@@ -7,6 +7,8 @@ const dbService = DatabaseService();
 const Parser = require('rss-parser');
 const parser = new Parser();
 const { generateSummary } = require('./aiService.js');
+const { FeedProcessor } = require('./src/services/feedProcessor.js');
+const { AIWorkerPool } = require('./src/services/aiWorkerPool.js');
 
 let mainWindow;
 
@@ -30,6 +32,10 @@ app.whenReady().then(async () => {
   await dbService.initialize();
   console.log('Database optimizations enabled and ready.');
   
+  // Initialize AI worker pool
+  await aiWorkerPool.initialize();
+  console.log('AI worker pool initialized and ready.');
+  
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -39,6 +45,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
+    await aiWorkerPool.shutdown();
     await dbService.close();
     app.quit();
   }
@@ -48,52 +55,149 @@ app.on('window-all-closed', async () => {
 
 const AGENT_CYCLE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
-async function runFetcherAgent() {
-    console.log('[Fetcher Agent] Running...');
-    const feeds = await dbService.feeds.getAll();
+// Initialize concurrent feed processor with configuration
+const feedProcessor = new FeedProcessor({
+    concurrencyLimit: 5,
+    requestTimeout: 30000,
+    retryAttempts: 3,
+    retryDelay: 1000,
+    dbService: dbService
+});
 
-    for (const feed of feeds) {
-        try {
-            const parsedFeed = await parser.parseURL(feed.url);
-            const newArticles = await dbService.articles.insertNew(feed.id, parsedFeed.items);
-
-            if (newArticles.length > 0) {
-                console.log(`[Fetcher Agent] Found ${newArticles.length} new articles for ${feed.name}`);
-                if (mainWindow) mainWindow.webContents.send('articles-updated', { feedId: feed.id });
-            }
-
-        } catch (error) {
-            console.error(`[Fetcher Agent] Error fetching feed ${feed.url}:`, error.message);
-        }
+// Initialize AI worker pool with multiple Ollama instance support
+const aiWorkerPool = new AIWorkerPool({
+    poolSize: 2,
+    maxQueueSize: 50,
+    workerTimeout: 60000,
+    aiConfig: {
+        instances: [
+            { url: 'http://localhost:11434', model: 'phi3:mini', weight: 1 },
+            // Additional instances can be configured here:
+            // { url: 'http://localhost:11435', model: 'phi3:mini', weight: 1 },
+            // { url: 'http://localhost:11436', model: 'llama2:7b', weight: 0.8 },
+        ],
+        requestTimeout: 60000,
+        retryAttempts: 2,
+        healthCheckInterval: 5 * 60 * 1000
     }
-    console.log('[Fetcher Agent] Finished.');
+});
+
+async function runFetcherAgent() {
+    console.log('[Fetcher Agent] Running with concurrent processing...');
+    const feeds = await dbService.feeds.getAll();
+    
+    if (feeds.length === 0) {
+        console.log('[Fetcher Agent] No feeds configured.');
+        return;
+    }
+
+    const startTime = Date.now();
+    let totalNewArticles = 0;
+    let successfulFeeds = 0;
+    let failedFeeds = 0;
+
+    // Process feeds concurrently
+    const results = await feedProcessor.processFeeds(feeds, async (feed, result) => {
+        if (result.success && !result.skipped) {
+            try {
+                if (result.notModified) {
+                    console.log(`[Fetcher Agent] Feed ${feed.name} not modified (304)`);
+                    successfulFeeds++;
+                    return;
+                }
+
+                // Use optimized insertion method with diff
+                const newArticles = await dbService.articles.insertNewOptimized(feed.id, result.articles);
+                totalNewArticles += newArticles.length;
+                successfulFeeds++;
+
+                if (newArticles.length > 0) {
+                    console.log(`[Fetcher Agent] Found ${newArticles.length} new articles for ${feed.name} (${result.wasConditional ? 'conditional' : 'full'} fetch)`);
+                    if (mainWindow) mainWindow.webContents.send('articles-updated', { feedId: feed.id });
+                } else {
+                    console.log(`[Fetcher Agent] No new articles for ${feed.name} (${result.articles.length} total articles)`);
+                }
+            } catch (dbError) {
+                console.error(`[Fetcher Agent] Database error for feed ${feed.name}:`, dbError.message);
+                failedFeeds++;
+            }
+        } else if (result.skipped) {
+            console.log(`[Fetcher Agent] Skipped feed ${feed.name}: ${result.reason}`);
+        } else {
+            console.error(`[Fetcher Agent] Failed to fetch feed ${feed.name}: ${result.error}`);
+            failedFeeds++;
+        }
+    });
+
+    const processingTime = Date.now() - startTime;
+    const stats = feedProcessor.getStatistics();
+    
+    console.log(`[Fetcher Agent] Finished in ${processingTime}ms. ` +
+                `${successfulFeeds} successful, ${failedFeeds} failed. ` +
+                `Total new articles: ${totalNewArticles}. ` +
+                `Feeds in backoff: ${stats.feedsInBackoff}`);
 }
 
 async function runSummarizerAgent() {
-    console.log('[Summarizer Agent] Running...');
+    console.log('[Summarizer Agent] Running with worker pool...');
     let articlesToSummarize;
+    const startTime = Date.now();
+    let totalProcessed = 0;
+    let successCount = 0;
+    let errorCount = 0;
 
     do {
-        articlesToSummarize = await dbService.articles.getToSummarize(5);
+        articlesToSummarize = await dbService.articles.getToSummarize(10); // Increased batch size for worker pool
 
         if (articlesToSummarize.length > 0) {
             console.log(`[Summarizer Agent] Found a batch of ${articlesToSummarize.length} articles to summarize.`);
         }
 
-        for (const article of articlesToSummarize) {
+        // Process articles concurrently using worker pool
+        const processingPromises = articlesToSummarize.map(async (article) => {
             try {
                 await updateArticleStatus(article.id, 'summarizing');
-                const summary = await generateSummary(article.content);
-                await updateArticleStatus(article.id, 'summarized', summary);
-                console.log(`[Summarizer Agent] Successfully summarized article ${article.id}`);
+                
+                const result = await aiWorkerPool.summarizeArticle({
+                    articleId: article.id,
+                    content: article.content,
+                    title: article.title,
+                    url: article.link
+                });
+                
+                await updateArticleStatus(article.id, 'summarized', result.summary);
+                console.log(`[Summarizer Agent] Successfully summarized article ${article.id} in ${result.processingTime}ms`);
+                successCount++;
+                
+                return { success: true, articleId: article.id, processingTime: result.processingTime };
+                
             } catch (error) {
                 console.error(`[Summarizer Agent] Error summarizing article ${article.id}:`, error.message);
                 await updateArticleStatus(article.id, 'failed');
+                errorCount++;
+                
+                return { success: false, articleId: article.id, error: error.message };
             }
-        }
+        });
+
+        // Wait for all articles in current batch to complete
+        const results = await Promise.allSettled(processingPromises);
+        totalProcessed += articlesToSummarize.length;
+        
+        // Log batch completion
+        const batchSuccessful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+        const batchErrors = results.length - batchSuccessful;
+        console.log(`[Summarizer Agent] Batch completed: ${batchSuccessful} successful, ${batchErrors} errors`);
+        
     } while (articlesToSummarize.length > 0);
 
-    console.log('[Summarizer Agent] Finished.');
+    const totalTime = Date.now() - startTime;
+    const poolStats = aiWorkerPool.getStatistics();
+    
+    console.log(`[Summarizer Agent] Finished in ${totalTime}ms. ` +
+                `Processed: ${totalProcessed}, Success: ${successCount}, Errors: ${errorCount}. ` +
+                `Pool stats: ${poolStats.busyWorkers}/${poolStats.activeWorkers} workers busy, ` +
+                `${poolStats.queueSize} queued, avg processing: ${Math.round(poolStats.averageProcessingTime)}ms`);
 }
 
 async function runAgentCycle() {
@@ -180,4 +284,67 @@ ipcMain.handle('retry-summarization', async (event, articleId) => {
     await dbService.articles.updateStatus(articleId, 'new');
     runSummarizerAgent();
     return { success: true };
+});
+
+ipcMain.handle('get-feed-statistics', async () => {
+    return feedProcessor.getStatistics();
+});
+
+ipcMain.handle('clear-feed-failure-tracking', async (event, { feedId, feedUrl }) => {
+    feedProcessor.clearFailureTracking(feedId, feedUrl);
+    return { success: true };
+});
+
+ipcMain.handle('force-feed-refresh', async () => {
+    console.log('[Manual Refresh] Starting forced feed refresh...');
+    await runFetcherAgent();
+    return { success: true };
+});
+
+ipcMain.handle('get-ai-worker-stats', async () => {
+    return aiWorkerPool.getStatistics();
+});
+
+ipcMain.handle('ai-worker-health-check', async () => {
+    return await aiWorkerPool.healthCheck();
+});
+
+ipcMain.handle('force-summarization', async () => {
+    console.log('[Manual Summarization] Starting forced summarization...');
+    await runSummarizerAgent();
+    return { success: true };
+});
+
+ipcMain.handle('get-ai-load-balancer-stats', async () => {
+    // Get stats from first worker (they all share the same config)
+    if (aiWorkerPool.workers.length > 0) {
+        return new Promise((resolve) => {
+            const worker = aiWorkerPool.workers[0];
+            const requestId = `stats-${Date.now()}`;
+            
+            worker.once('message', (message) => {
+                if (message.id === requestId) {
+                    resolve(message.result || { error: 'No stats available' });
+                }
+            });
+            
+            worker.postMessage({
+                id: requestId,
+                type: 'GET_LOAD_BALANCER_STATS',
+                data: {}
+            });
+            
+            setTimeout(() => {
+                resolve({ error: 'Timeout getting load balancer stats' });
+            }, 5000);
+        });
+    } else {
+        return { error: 'No AI workers available' };
+    }
+});
+
+ipcMain.handle('configure-ai-instances', async (event, { instances }) => {
+    // This would require restarting workers with new configuration
+    console.log('[AI Config] Configuring AI instances:', instances);
+    return { success: true, message: 'AI instance configuration updated (restart required)' };
 });

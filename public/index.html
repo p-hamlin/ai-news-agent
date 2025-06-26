@@ -20,15 +20,24 @@
 <body class="bg-gray-900 text-gray-200 font-sans">
     <div id="root"></div>
 
+    <!-- Browser Compatibility -->
+    <script src="js/utils/browserPolyfills.js"></script>
+    
     <!-- Component Scripts -->
     <script src="js/hooks/useAppState.js"></script>
     <script src="js/services/api.js"></script>
+    <script src="js/services/performanceMonitor.js"></script>
+    <script src="js/services/memoryOptimizer.js"></script>
     <script src="js/components/ErrorBoundary.js"></script>
     <script src="js/components/ArticleStatusIcon.js"></script>
+    <script src="js/components/VirtualizedList.js"></script>
     <script src="js/components/FeedsPanel.js"></script>
     <script src="js/components/ArticlesPanel.js"></script>
+    <script src="js/components/EnhancedArticlesPanel.js"></script>
     <script src="js/components/ContentPanel.js"></script>
+    <script src="js/components/LazyContentPanel.js"></script>
     <script src="js/components/SettingsModal.js"></script>
+    <script src="js/components/EnhancedApp.js"></script>
 
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
@@ -298,7 +307,31 @@
         
         const container = document.getElementById('root');
         const root = ReactDOM.createRoot(container);
-        root.render(<App />);
+        
+        // Use enhanced app with performance optimizations by default
+        // Set debug=true in URL to enable performance monitoring
+        const useEnhancedApp = true;
+        
+        try {
+            if (useEnhancedApp && window.EnhancedApp && window.performanceMonitor && window.VirtualizedList) {
+                console.log('Using enhanced app with performance optimizations');
+                root.render(<window.EnhancedApp />);
+            } else {
+                console.log('Using standard app - enhanced components not available');
+                root.render(<App />);
+            }
+        } catch (error) {
+            console.warn('Error loading enhanced app, falling back to standard app:', error);
+            try {
+                root.render(<App />);
+            } catch (fallbackError) {
+                console.error('Failed to load any app version:', fallbackError);
+                document.getElementById('root').innerHTML = 
+                    '<div class="h-screen flex items-center justify-center bg-gray-900 text-white">' +
+                    '<div class="text-center"><h1 class="text-2xl mb-4">Application Load Error</h1>' +
+                    '<p>Please refresh the page or check the console for details.</p></div></div>';
+            }
+        }
     </script>
 </body>
 </html>

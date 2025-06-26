@@ -91,6 +91,19 @@ class DatabaseConnection {
             FOREIGN KEY (feedId) REFERENCES feeds (id) ON DELETE CASCADE
         )`);
 
+        await this.run(`CREATE TABLE IF NOT EXISTS feed_metadata (
+            feedId INTEGER PRIMARY KEY,
+            lastFetchTime DATETIME,
+            lastSuccessfulFetch DATETIME,
+            lastErrorTime DATETIME,
+            lastErrorMessage TEXT,
+            consecutiveFailures INTEGER DEFAULT 0,
+            etag TEXT,
+            lastModified TEXT,
+            averageArticleCount INTEGER DEFAULT 0,
+            FOREIGN KEY (feedId) REFERENCES feeds (id) ON DELETE CASCADE
+        )`);
+
         // Add missing columns if they don't exist
         await this.addMissingColumns();
     }
@@ -131,7 +144,11 @@ class DatabaseConnection {
             
             // Folders indexes
             'CREATE INDEX IF NOT EXISTS idx_folders_orderIndex ON folders(orderIndex)',
-            'CREATE INDEX IF NOT EXISTS idx_folders_parentId ON folders(parentId)'
+            'CREATE INDEX IF NOT EXISTS idx_folders_parentId ON folders(parentId)',
+            
+            // Feed metadata indexes
+            'CREATE INDEX IF NOT EXISTS idx_feed_metadata_lastFetch ON feed_metadata(lastFetchTime)',
+            'CREATE INDEX IF NOT EXISTS idx_feed_metadata_lastSuccess ON feed_metadata(lastSuccessfulFetch)'
         ];
 
         for (const indexSql of indexes) {
@@ -163,7 +180,13 @@ class DatabaseConnection {
             'folders.insert': 'INSERT INTO folders (name, orderIndex) VALUES (?, ?)',
             'folders.delete': 'DELETE FROM folders WHERE id = ?',
             'folders.updateName': 'UPDATE folders SET name = ? WHERE id = ?',
-            'folders.updateOrder': 'UPDATE folders SET orderIndex = ? WHERE id = ?'
+            'folders.updateOrder': 'UPDATE folders SET orderIndex = ? WHERE id = ?',
+            
+            // Feed metadata operations
+            'feedMetadata.get': 'SELECT * FROM feed_metadata WHERE feedId = ?',
+            'feedMetadata.upsert': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastSuccessfulFetch, lastErrorTime, lastErrorMessage, consecutiveFailures, etag, lastModified, averageArticleCount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'feedMetadata.updateSuccess': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastSuccessfulFetch, consecutiveFailures, etag, lastModified, averageArticleCount) VALUES (?, ?, ?, 0, ?, ?, ?)',
+            'feedMetadata.updateFailure': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastErrorTime, lastErrorMessage, consecutiveFailures) VALUES (?, ?, ?, ?, COALESCE((SELECT consecutiveFailures FROM feed_metadata WHERE feedId = ?), 0) + 1)'
         };
 
         for (const [key, sql] of Object.entries(statements)) {
