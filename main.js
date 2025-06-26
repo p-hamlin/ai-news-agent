@@ -8,6 +8,12 @@ const Parser = require('rss-parser');
 const parser = new Parser();
 const { FeedProcessor } = require('./src/services/feedProcessor.js');
 const { AIWorkerPool } = require('./src/services/aiWorkerPool.js');
+const { archiveManager } = require('./src/services/archiveManager.js');
+const { ExportService } = require('./src/services/exportService.js');
+const { DuplicateDetector } = require('./src/services/duplicateDetector.js');
+const { OpmlService } = require('./src/services/opmlService.js');
+const { FeedRecommendationService } = require('./src/services/feedRecommendationService.js');
+const { settingsManager } = require('./src/services/settingsManager.js');
 
 let mainWindow;
 
@@ -62,6 +68,18 @@ const feedProcessor = new FeedProcessor({
     retryDelay: 1000,
     dbService: dbService
 });
+
+// Initialize export service
+const exportService = new ExportService(dbService);
+
+// Initialize duplicate detector
+const duplicateDetector = new DuplicateDetector(dbService);
+
+// Initialize OPML service
+const opmlService = new OpmlService(dbService);
+
+// Initialize feed recommendation service
+const feedRecommendationService = new FeedRecommendationService(dbService);
 
 // Initialize AI worker pool with multiple Ollama instance support
 const aiWorkerPool = new AIWorkerPool({
@@ -203,6 +221,25 @@ async function runAgentCycle() {
     console.log('[Agent Cycle] Starting... ');
     await runFetcherAgent();
     await runSummarizerAgent();
+    
+    // Run archive maintenance periodically (every 6th cycle = ~30 minutes)
+    if (!runAgentCycle.archiveCounter) runAgentCycle.archiveCounter = 0;
+    runAgentCycle.archiveCounter++;
+    
+    if (runAgentCycle.archiveCounter >= 6) {
+        console.log('[Agent Cycle] Running archive maintenance...');
+        try {
+            const archiveResult = await archiveManager.runScheduledMaintenance();
+            if (archiveResult.archive && archiveResult.archive.archivedCount > 0) {
+                console.log(`[Agent Cycle] Archived ${archiveResult.archive.archivedCount} articles`);
+                if (mainWindow) mainWindow.webContents.send('archive-maintenance-completed', archiveResult);
+            }
+        } catch (error) {
+            console.error('[Agent Cycle] Archive maintenance failed:', error);
+        }
+        runAgentCycle.archiveCounter = 0;
+    }
+    
     console.log('[Agent Cycle] Finished.');
 }
 
@@ -373,4 +410,281 @@ ipcMain.handle('configure-ai-instances', async (event, { instances }) => {
     // This would require restarting workers with new configuration
     console.log('[AI Config] Configuring AI instances:', instances);
     return { success: true, message: 'AI instance configuration updated (restart required)' };
+});
+
+// --- Archive Management IPC Handlers ---
+
+ipcMain.handle('archive-run-auto', async () => {
+    console.log('[Archive] Running automatic archiving...');
+    return await archiveManager.runAutoArchive();
+});
+
+ipcMain.handle('archive-articles', async (event, { articleIds, reason = 'manual' }) => {
+    console.log(`[Archive] Archiving ${articleIds.length} articles manually...`);
+    return await archiveManager.archiveArticles(articleIds, reason);
+});
+
+ipcMain.handle('archive-by-feed', async (event, { feedId, retentionDays = null }) => {
+    console.log(`[Archive] Archiving articles for feed ${feedId}...`);
+    return await archiveManager.archiveByFeed(feedId, retentionDays);
+});
+
+ipcMain.handle('archive-cleanup-old', async () => {
+    console.log('[Archive] Cleaning up old archives...');
+    return await archiveManager.cleanupOldArchives();
+});
+
+ipcMain.handle('archive-restore', async (event, { archivedArticleId }) => {
+    console.log(`[Archive] Restoring archived article ${archivedArticleId}...`);
+    return await archiveManager.restoreArticle(archivedArticleId);
+});
+
+ipcMain.handle('archive-get-statistics', async () => {
+    return await archiveManager.getArchiveStatistics();
+});
+
+ipcMain.handle('archive-get-articles', async (event, { limit = 50, offset = 0, feedId = null }) => {
+    return await archiveManager.getArchivedArticles({ limit, offset, feedId });
+});
+
+ipcMain.handle('archive-search', async (event, { query, limit = 50, offset = 0 }) => {
+    return await archiveManager.searchArchives(query, { limit, offset });
+});
+
+ipcMain.handle('archive-estimate-impact', async (event, { retentionDays = null }) => {
+    return await archiveManager.estimateArchiveImpact(retentionDays);
+});
+
+ipcMain.handle('archive-get-config', async () => {
+    return archiveManager.getConfig();
+});
+
+ipcMain.handle('archive-update-config', async (event, { config }) => {
+    archiveManager.updateConfig(config);
+    return { success: true, config: archiveManager.getConfig() };
+});
+
+ipcMain.handle('archive-get-status', async () => {
+    return archiveManager.getStatus();
+});
+
+ipcMain.handle('archive-run-maintenance', async () => {
+    console.log('[Archive] Running scheduled maintenance...');
+    return await archiveManager.runScheduledMaintenance();
+});
+
+// --- Export IPC Handlers ---
+
+ipcMain.handle('export-articles', async (event, options = {}) => {
+    console.log(`[Export] Exporting articles in ${options.format || 'markdown'} format...`);
+    return await exportService.exportArticles(options);
+});
+
+ipcMain.handle('export-get-formats', async () => {
+    return exportService.getAvailableFormats();
+});
+
+ipcMain.handle('export-estimate-size', async (event, options = {}) => {
+    // Get articles without actually exporting to estimate size
+    try {
+        await dbService.initialize();
+        const articles = await exportService.getArticlesForExport({
+            articleIds: options.articleIds,
+            feedIds: options.feedIds,
+            includeArchived: options.includeArchived,
+            dateRange: options.dateRange
+        });
+        
+        const estimatedSize = articles.reduce((total, article) => {
+            return total + (article.title?.length || 0) + (article.content?.length || 0) + (article.summary?.length || 0);
+        }, 0);
+        
+        return {
+            articleCount: articles.length,
+            estimatedSizeBytes: estimatedSize,
+            estimatedSizeMB: Math.round(estimatedSize / 1024 / 1024 * 100) / 100
+        };
+    } catch (error) {
+        return { error: error.message };
+    }
+});
+
+// --- Duplicate Detection IPC Handlers ---
+
+ipcMain.handle('duplicates-find', async (event, options = {}) => {
+    console.log('[Duplicates] Scanning for duplicate articles...');
+    return await duplicateDetector.findDuplicates(options);
+});
+
+ipcMain.handle('duplicates-merge', async (event, { groupId, keepArticleId, deleteArticleIds, mergeOptions = {} }) => {
+    console.log(`[Duplicates] Merging duplicate group ${groupId}...`);
+    return await duplicateDetector.mergeDuplicates(groupId, keepArticleId, deleteArticleIds, mergeOptions);
+});
+
+ipcMain.handle('duplicates-auto-merge', async (event, options = {}) => {
+    console.log('[Duplicates] Running auto-merge for obvious duplicates...');
+    return await duplicateDetector.autoMergeDuplicates(options);
+});
+
+ipcMain.handle('duplicates-get-statistics', async () => {
+    return await duplicateDetector.getStatistics();
+});
+
+// --- Content Cleanup IPC Handlers ---
+
+ipcMain.handle('cleanup-failed-articles', async (event, { ageDays = 7 } = {}) => {
+    console.log(`[Cleanup] Cleaning up failed articles older than ${ageDays} days...`);
+    return await dbService.archive.cleanupFailedArticles(ageDays);
+});
+
+ipcMain.handle('cleanup-empty-content', async (event, { dryRun = false } = {}) => {
+    console.log(`[Cleanup] ${dryRun ? 'Analyzing' : 'Cleaning up'} articles with empty content...`);
+    return await dbService.archive.cleanupEmptyContent(dryRun);
+});
+
+ipcMain.handle('cleanup-duplicate-archives', async (event, { dryRun = false } = {}) => {
+    console.log(`[Cleanup] ${dryRun ? 'Analyzing' : 'Cleaning up'} duplicate archived articles...`);
+    return await dbService.archive.cleanupDuplicateArchives(dryRun);
+});
+
+ipcMain.handle('cleanup-orphaned-metadata', async () => {
+    console.log('[Cleanup] Cleaning up orphaned feed metadata...');
+    return await dbService.archive.cleanupOrphanedMetadata();
+});
+
+ipcMain.handle('cleanup-optimize-database', async () => {
+    console.log('[Cleanup] Optimizing database (VACUUM, ANALYZE, REINDEX)...');
+    return await dbService.archive.optimizeDatabase();
+});
+
+ipcMain.handle('cleanup-comprehensive', async (event, options = {}) => {
+    console.log('[Cleanup] Running comprehensive cleanup...');
+    return await dbService.archive.runComprehensiveCleanup(options);
+});
+
+ipcMain.handle('cleanup-get-database-size', async () => {
+    return await dbService.archive.getDatabaseSize();
+});
+
+// --- OPML Import/Export IPC Handlers ---
+
+ipcMain.handle('opml-export', async (event, options = {}) => {
+    console.log('[OPML] Exporting feeds to OPML format...');
+    return await opmlService.exportToOpml(options);
+});
+
+ipcMain.handle('opml-import', async (event, { opmlContent, options = {} }) => {
+    console.log('[OPML] Importing feeds from OPML content...');
+    return await opmlService.importFromOpml(opmlContent, options);
+});
+
+ipcMain.handle('opml-import-file', async (event, { filePath, options = {} }) => {
+    console.log(`[OPML] Importing feeds from OPML file: ${filePath}`);
+    try {
+        const fs = require('fs').promises;
+        const opmlContent = await fs.readFile(filePath, 'utf8');
+        return await opmlService.importFromOpml(opmlContent, options);
+    } catch (error) {
+        return { success: false, error: `Failed to read OPML file: ${error.message}` };
+    }
+});
+
+ipcMain.handle('opml-get-statistics', async () => {
+    return await opmlService.getOpmlStatistics();
+});
+
+ipcMain.handle('opml-validate-content', async (event, { opmlContent }) => {
+    console.log('[OPML] Validating OPML content...');
+    try {
+        const { feeds, folders } = await opmlService.parseOpmlContent(opmlContent);
+        return {
+            success: true,
+            feedCount: feeds.length,
+            folderCount: folders.length,
+            feeds: feeds.slice(0, 10), // Preview first 10 feeds
+            folders: folders.slice(0, 10) // Preview first 10 folders
+        };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+});
+
+// --- Feed Recommendation IPC Handlers ---
+
+ipcMain.handle('recommendations-get', async (event, options = {}) => {
+    console.log('[Recommendations] Getting feed recommendations...');
+    return await feedRecommendationService.getRecommendations(options);
+});
+
+ipcMain.handle('recommendations-get-statistics', async () => {
+    return await feedRecommendationService.getRecommendationStatistics();
+});
+
+ipcMain.handle('recommendations-get-categories', async () => {
+    return feedRecommendationService.getAvailableCategories();
+});
+
+ipcMain.handle('recommendations-get-by-category', async (event, { category }) => {
+    return feedRecommendationService.getFeedsByCategory(category);
+});
+
+ipcMain.handle('recommendations-update-threshold', async (event, { threshold }) => {
+    feedRecommendationService.updateSimilarityThreshold(threshold);
+    return { success: true, threshold: feedRecommendationService.similarityThreshold };
+});
+
+// --- Settings Management IPC Handlers ---
+
+ipcMain.handle('settings-load', async () => {
+    console.log('[Settings] Loading application settings...');
+    return await settingsManager.loadSettings();
+});
+
+ipcMain.handle('settings-save', async () => {
+    console.log('[Settings] Saving application settings...');
+    return await settingsManager.saveSettings();
+});
+
+ipcMain.handle('settings-get', async () => {
+    return settingsManager.getSettings();
+});
+
+ipcMain.handle('settings-get-category', async (event, { category }) => {
+    return settingsManager.getCategorySettings(category);
+});
+
+ipcMain.handle('settings-update', async (event, { updates }) => {
+    console.log('[Settings] Updating settings:', Object.keys(updates));
+    return await settingsManager.updateSettings(updates);
+});
+
+ipcMain.handle('settings-reset', async (event, { categories = null }) => {
+    console.log('[Settings] Resetting settings:', categories ? categories : 'all');
+    return await settingsManager.resetSettings(categories);
+});
+
+ipcMain.handle('settings-export', async (event, { filePath }) => {
+    console.log(`[Settings] Exporting settings to: ${filePath}`);
+    return await settingsManager.exportSettings(filePath);
+});
+
+ipcMain.handle('settings-import', async (event, { filePath, mergeMode = true }) => {
+    console.log(`[Settings] Importing settings from: ${filePath}`);
+    return await settingsManager.importSettings(filePath, mergeMode);
+});
+
+ipcMain.handle('settings-validate', async (event, { settings }) => {
+    return settingsManager.validateSettings(settings);
+});
+
+ipcMain.handle('settings-get-schema', async () => {
+    return settingsManager.getSettingsSchema();
+});
+
+ipcMain.handle('settings-get-path', async () => {
+    return settingsManager.getSettingsPath();
+});
+
+ipcMain.handle('settings-file-exists', async () => {
+    return await settingsManager.settingsFileExists();
 });

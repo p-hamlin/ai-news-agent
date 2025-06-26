@@ -15,7 +15,7 @@ function EnhancedApp() {
             getReport: () => null
         };
     const { measureRender, endMeasurement, recordInteraction, getReport } = performanceHooks;
-    const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isLoadingArticles, expandedFolders, draggedItem, dragOverItem, isSearchVisible, searchResults, searchQuery } = state;
+    const { feeds, folders, articles, selectedFeed, selectedArticle, isSettingsVisible, isExportVisible, isLoadingArticles, expandedFolders, draggedItem, dragOverItem, isSearchVisible, searchResults, searchQuery } = state;
     
     // Performance optimization settings
     const [useVirtualization, setUseVirtualization] = useState(true);
@@ -428,6 +428,7 @@ function EnhancedApp() {
                             dragOverItem,
                             onSelectFeed: handleSelectFeed,
                             onShowSettings: () => dispatch({ type: 'SHOW_SETTINGS' }),
+                            onShowExport: () => dispatch({ type: 'SHOW_EXPORT' }),
                             onToggleSearch: handleToggleSearch,
                             onToggleFolder: handleToggleFolder,
                             onDragStart: handleDragStart,
@@ -484,6 +485,13 @@ function EnhancedApp() {
                 onCreateFolder: handleCreateFolder,
                 onDeleteFolder: handleDeleteFolder,
                 onMoveFeedToFolder: handleMoveFeedToFolder
+            }),
+            
+            // Export modal
+            React.createElement(window.ExportModal, {
+                feeds,
+                isVisible: isExportVisible,
+                onClose: () => dispatch({ type: 'HIDE_EXPORT' })
             }),
             
             // Performance debug panel

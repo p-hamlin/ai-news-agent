@@ -1,5 +1,5 @@
 // FeedsPanel.js
-function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem, dragOverItem, onSelectFeed, onShowSettings, onToggleSearch, onToggleFolder, onDragStart, onDragOver, onDragEnd, onDrop }) {
+function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem, dragOverItem, onSelectFeed, onShowSettings, onShowExport, onToggleSearch, onToggleFolder, onDragStart, onDragOver, onDragEnd, onDrop }) {
     const [editingFeed, setEditingFeed] = React.useState(null);
     const [editValue, setEditValue] = React.useState('');
 
@@ -152,6 +152,13 @@ function FeedsPanel({ feeds, folders, selectedFeed, expandedFolders, draggedItem
                             d: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
                         })
                     )
+                ),
+                React.createElement('button', { 
+                    onClick: onShowExport, 
+                    className: "text-gray-400 hover:text-white transition-colors",
+                    title: "Export Articles"
+                },
+                    React.createElement('i', { className: "fas fa-download" })
                 ),
                 React.createElement('button', { 
                     onClick: onShowSettings, 

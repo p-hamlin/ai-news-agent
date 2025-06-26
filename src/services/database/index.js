@@ -4,6 +4,7 @@ const { FeedOperations } = require('./feedOperations');
 const { FolderOperations } = require('./folderOperations');
 const { ArticleOperations } = require('./articleOperations');
 const { FeedMetadataOperations } = require('./feedMetadataOperations');
+const { ArchiveOperations } = require('./archiveOperations');
 
 const DatabaseService = () => {
     // Ensure connection is initialized
@@ -34,6 +35,10 @@ const DatabaseService = () => {
 
         get feedMetadata() {
             return FeedMetadataOperations(dbConnection);
+        },
+
+        get archive() {
+            return ArchiveOperations(dbConnection);
         },
         
         // Database utility functions

@@ -9,6 +9,7 @@ function useAppState() {
         selectedFeed: null,
         selectedArticle: null,
         isSettingsVisible: false,
+        isExportVisible: false,
         isLoadingArticles: false,
         expandedFolders: new Set(),
         draggedItem: null,
@@ -81,6 +82,10 @@ function useAppState() {
                 return { ...state, isSettingsVisible: true };
             case 'HIDE_SETTINGS':
                 return { ...state, isSettingsVisible: false };
+            case 'SHOW_EXPORT':
+                return { ...state, isExportVisible: true };
+            case 'HIDE_EXPORT':
+                return { ...state, isExportVisible: false };
             case 'TOGGLE_SEARCH':
                 return { 
                     ...state, 

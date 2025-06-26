@@ -104,6 +104,23 @@ class DatabaseConnection {
             FOREIGN KEY (feedId) REFERENCES feeds (id) ON DELETE CASCADE
         )`);
 
+        // Create archive table for archived articles
+        await this.run(`CREATE TABLE IF NOT EXISTS archived_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            originalId INTEGER NOT NULL,
+            feedId INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            link TEXT NOT NULL,
+            pubDate TEXT,
+            content TEXT,
+            summary TEXT,
+            isRead BOOLEAN DEFAULT 0,
+            status TEXT DEFAULT 'archived',
+            archivedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            createdAt DATETIME,
+            archiveReason TEXT DEFAULT 'retention_policy'
+        )`);
+
         // Add missing columns if they don't exist
         await this.addMissingColumns();
         
@@ -121,6 +138,7 @@ class DatabaseConnection {
         };
 
         await addColumnIfMissing('articles', 'status', 'TEXT DEFAULT "new"');
+        await addColumnIfMissing('articles', 'archivedAt', 'DATETIME');
         await addColumnIfMissing('feeds', 'displayName', 'TEXT');
         await addColumnIfMissing('feeds', 'folderId', 'INTEGER');
         await addColumnIfMissing('feeds', 'orderIndex', 'INTEGER DEFAULT 0');
@@ -197,7 +215,13 @@ class DatabaseConnection {
             
             // Feed metadata indexes
             'CREATE INDEX IF NOT EXISTS idx_feed_metadata_lastFetch ON feed_metadata(lastFetchTime)',
-            'CREATE INDEX IF NOT EXISTS idx_feed_metadata_lastSuccess ON feed_metadata(lastSuccessfulFetch)'
+            'CREATE INDEX IF NOT EXISTS idx_feed_metadata_lastSuccess ON feed_metadata(lastSuccessfulFetch)',
+            
+            // Archive indexes
+            'CREATE INDEX IF NOT EXISTS idx_archived_articles_feedId ON archived_articles(feedId)',
+            'CREATE INDEX IF NOT EXISTS idx_archived_articles_archivedAt ON archived_articles(archivedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_archived_articles_originalId ON archived_articles(originalId)',
+            'CREATE INDEX IF NOT EXISTS idx_articles_archivedAt ON articles(archivedAt)'
         ];
 
         for (const indexSql of indexes) {
@@ -261,7 +285,20 @@ class DatabaseConnection {
             'feedMetadata.get': 'SELECT * FROM feed_metadata WHERE feedId = ?',
             'feedMetadata.upsert': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastSuccessfulFetch, lastErrorTime, lastErrorMessage, consecutiveFailures, etag, lastModified, averageArticleCount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             'feedMetadata.updateSuccess': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastSuccessfulFetch, consecutiveFailures, etag, lastModified, averageArticleCount) VALUES (?, ?, ?, 0, ?, ?, ?)',
-            'feedMetadata.updateFailure': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastErrorTime, lastErrorMessage, consecutiveFailures) VALUES (?, ?, ?, ?, COALESCE((SELECT consecutiveFailures FROM feed_metadata WHERE feedId = ?), 0) + 1)'
+            'feedMetadata.updateFailure': 'INSERT OR REPLACE INTO feed_metadata (feedId, lastFetchTime, lastErrorTime, lastErrorMessage, consecutiveFailures) VALUES (?, ?, ?, ?, COALESCE((SELECT consecutiveFailures FROM feed_metadata WHERE feedId = ?), 0) + 1)',
+            
+            // Archive operations
+            'articles.archiveById': 'INSERT INTO archived_articles (originalId, feedId, title, link, pubDate, content, summary, isRead, status, createdAt, archiveReason) SELECT id, feedId, title, link, pubDate, content, summary, isRead, status, createdAt, ? FROM articles WHERE id = ?',
+            'articles.deleteAfterArchive': 'DELETE FROM articles WHERE id = ?',
+            'articles.getForArchival': 'SELECT * FROM articles WHERE createdAt < ? AND (isRead = 1 OR status = "failed") ORDER BY createdAt ASC',
+            'articles.countForArchival': 'SELECT COUNT(*) as count FROM articles WHERE createdAt < ? AND (isRead = 1 OR status = "failed")',
+            'archived_articles.getAll': 'SELECT * FROM archived_articles ORDER BY archivedAt DESC LIMIT ? OFFSET ?',
+            'archived_articles.getByFeed': 'SELECT * FROM archived_articles WHERE feedId = ? ORDER BY archivedAt DESC LIMIT ? OFFSET ?',
+            'archived_articles.count': 'SELECT COUNT(*) as count FROM archived_articles',
+            'archived_articles.countByFeed': 'SELECT COUNT(*) as count FROM archived_articles WHERE feedId = ?',
+            'archived_articles.deleteOld': 'DELETE FROM archived_articles WHERE archivedAt < ?',
+            'archived_articles.restore': 'INSERT OR IGNORE INTO articles (feedId, title, link, pubDate, content, summary, isRead, status, createdAt) SELECT feedId, title, link, pubDate, content, summary, isRead, CASE WHEN status = "archived" THEN "new" ELSE status END, createdAt FROM archived_articles WHERE id = ?',
+            'archived_articles.deleteAfterRestore': 'DELETE FROM archived_articles WHERE id = ?'
         };
 
         for (const [key, sql] of Object.entries(statements)) {
