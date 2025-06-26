@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Component Test</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script src="js/hooks/useAppState.js"></script>
+    <script src="js/services/api.js"></script>
+    <script src="js/components/ErrorBoundary.js"></script>
+    <script src="js/components/ArticleStatusIcon.js"></script>
+
+    <script>
+        // Test if components are loaded
+        console.log('useAppState:', typeof window.useAppState);
+        console.log('ApiService:', typeof window.ApiService);
+        console.log('ErrorBoundary:', typeof window.ErrorBoundary);
+        console.log('ArticleStatusIcon:', typeof window.ArticleStatusIcon);
+        
+        // Simple test component
+        function TestApp() {
+            if (!window.ErrorBoundary) {
+                return React.createElement('div', null, 'ErrorBoundary not loaded');
+            }
+            return React.createElement(window.ErrorBoundary, null, 
+                React.createElement('div', null, 'Components loaded successfully!')
+            );
+        }
+        
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(React.createElement(TestApp));
+    </script>
+</body>
+</html>
