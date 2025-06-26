@@ -2,9 +2,8 @@
 
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const db = require('./database.js');
 const { DatabaseService } = require('./src/services/database/index.js');
-const dbService = DatabaseService(db);
+const dbService = DatabaseService();
 const Parser = require('rss-parser');
 const parser = new Parser();
 const { generateSummary } = require('./aiService.js');
@@ -26,7 +25,11 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Initialize optimized database connection
+  await dbService.initialize();
+  console.log('Database optimizations enabled and ready.');
+  
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -34,9 +37,9 @@ app.whenReady().then(() => {
   startAgents();
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
-    dbService.close();
+    await dbService.close();
     app.quit();
   }
 });
@@ -47,12 +50,7 @@ const AGENT_CYCLE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 async function runFetcherAgent() {
     console.log('[Fetcher Agent] Running...');
-    const feeds = await new Promise((resolve, reject) => {
-        db.all("SELECT * FROM feeds", [], (err, rows) => {
-            if (err) return reject(err);
-            resolve(rows);
-        });
-    });
+    const feeds = await dbService.feeds.getAll();
 
     for (const feed of feeds) {
         try {
