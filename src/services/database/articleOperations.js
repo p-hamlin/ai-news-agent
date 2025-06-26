@@ -132,6 +132,63 @@ const ArticleOperations = (dbConnection) => {
                 'SELECT * FROM articles ORDER BY pubDate DESC LIMIT ?',
                 [limit]
             );
+        },
+
+        // Get existing article links for a feed (for diff processing)
+        async getExistingLinks(feedId) {
+            const results = await dbConnection.all(
+                'SELECT link FROM articles WHERE feedId = ?',
+                [feedId]
+            );
+            return new Set(results.map(row => row.link));
+        },
+
+        // Get most recent article date for a feed (for optimization)
+        async getMostRecentDate(feedId) {
+            const result = await dbConnection.get(
+                'SELECT MAX(pubDate) as lastDate FROM articles WHERE feedId = ?',
+                [feedId]
+            );
+            return result.lastDate;
+        },
+
+        // Insert new articles with diff optimization
+        async insertNewOptimized(feedId, articles, existingLinks = null) {
+            if (articles.length === 0) return [];
+
+            // Get existing links if not provided
+            if (!existingLinks) {
+                existingLinks = await this.getExistingLinks(feedId);
+            }
+
+            // Filter out articles that already exist
+            const newArticleItems = articles.filter(item => !existingLinks.has(item.link));
+            
+            if (newArticleItems.length === 0) {
+                return [];
+            }
+
+            const newArticles = [];
+            
+            // Use transaction for better performance with multiple inserts
+            await dbConnection.transaction(async () => {
+                for (const item of newArticleItems) {
+                    const result = await dbConnection.runPrepared('articles.insertNew', [
+                        feedId,
+                        item.title,
+                        item.link,
+                        item.isoDate || new Date().toISOString(),
+                        item.contentSnippet || item.content || '',
+                        'new'
+                    ]);
+                    
+                    if (result.changes > 0) {
+                        newArticles.push(item.title);
+                    }
+                }
+            });
+
+            return newArticles;
         }
     };
 };
