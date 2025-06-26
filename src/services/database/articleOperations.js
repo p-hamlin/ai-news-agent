@@ -50,7 +50,7 @@ const ArticleOperations = (dbConnection) => {
         },
 
         // Get articles to summarize (batch processing) - uses index on status
-        async getToSummarize(limit = 5) {
+        async getToSummarize(limit = 100) {
             return await dbConnection.allPrepared('articles.getToSummarize', ['new', limit]);
         },
 

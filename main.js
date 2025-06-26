@@ -6,7 +6,6 @@ const { DatabaseService } = require('./src/services/database/index.js');
 const dbService = DatabaseService();
 const Parser = require('rss-parser');
 const parser = new Parser();
-const { generateSummary } = require('./aiService.js');
 const { FeedProcessor } = require('./src/services/feedProcessor.js');
 const { AIWorkerPool } = require('./src/services/aiWorkerPool.js');
 
@@ -147,7 +146,7 @@ async function runSummarizerAgent() {
     let errorCount = 0;
 
     do {
-        articlesToSummarize = await dbService.articles.getToSummarize(10); // Increased batch size for worker pool
+        articlesToSummarize = await dbService.articles.getToSummarize(100); // Process up to 100 articles at once
 
         if (articlesToSummarize.length > 0) {
             console.log(`[Summarizer Agent] Found a batch of ${articlesToSummarize.length} articles to summarize.`);
